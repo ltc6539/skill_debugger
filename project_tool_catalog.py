@@ -4,6 +4,28 @@ from skill_debugger.tool_registry import WorkspaceToolMeta
 
 
 PROJECT_TOOL_PRESETS: dict[str, list[WorkspaceToolMeta]] = {
+    "eat_agent": [
+        WorkspaceToolMeta(
+            name="recognize_image",
+            description="用 OpenRouter VLM 识别食物或食材图片。",
+            source="project_catalog:eat_agent",
+        ),
+        WorkspaceToolMeta(
+            name="get_calendar_events",
+            description="读取调试器本地日历中的事件。",
+            source="project_catalog:eat_agent",
+        ),
+        WorkspaceToolMeta(
+            name="create_calendar_event",
+            description="在调试器本地日历中创建事件。",
+            source="project_catalog:eat_agent",
+        ),
+        WorkspaceToolMeta(
+            name="canvas_card",
+            description="直接返回 JSON 卡片载荷，供前端按卡片处理。",
+            source="project_catalog:eat_agent",
+        ),
+    ],
     "google_maps": [
         WorkspaceToolMeta(
             name="places_text_search",

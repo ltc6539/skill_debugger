@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from skill_debugger.aligned_project_tools import ALIGNED_PROJECT_TOOLS, configure_aligned_project_tools
 from skill_debugger.composio_support import load_composio_class
 from skill_debugger.google_maps_tools import GOOGLE_MAPS_DIRECT_TOOLS, configure_google_maps
 from skill_debugger.project_tool_catalog import PROJECT_TOOL_PRESETS
@@ -26,8 +27,12 @@ class ProjectToolRuntime:
     def __init__(self, settings: SkillDebuggerSettings) -> None:
         self.settings = settings
         configure_google_maps(settings.google_maps_api_key)
+        configure_aligned_project_tools(settings)
         self._google_tools = {
             getattr(tool_obj, "name", ""): tool_obj for tool_obj in GOOGLE_MAPS_DIRECT_TOOLS
+        }
+        self._aligned_tools = {
+            getattr(tool_obj, "name", ""): tool_obj for tool_obj in ALIGNED_PROJECT_TOOLS
         }
         self._yelp_catalog = {
             meta.name: meta for meta in PROJECT_TOOL_PRESETS.get("yelp", [])
@@ -42,6 +47,14 @@ class ProjectToolRuntime:
                 tool_obj=google_tool,
                 execution_mode="live_google_maps",
                 source="project_catalog:google_maps",
+            )
+
+        aligned_tool = self._aligned_tools.get(tool_name)
+        if aligned_tool is not None:
+            return self._build_handle(
+                tool_obj=aligned_tool,
+                execution_mode=self._aligned_execution_mode(tool_name),
+                source="project_catalog:eat_agent",
             )
 
         if tool_name not in self._yelp_catalog:
@@ -132,3 +145,13 @@ class ProjectToolRuntime:
             source=source,
             tool_obj=tool_obj,
         )
+
+    @staticmethod
+    def _aligned_execution_mode(tool_name: str) -> str:
+        if tool_name == "recognize_image":
+            return "live_openrouter_vlm"
+        if tool_name in {"get_calendar_events", "create_calendar_event"}:
+            return "live_debug_calendar"
+        if tool_name == "canvas_card":
+            return "live_canvas_card"
+        return "live_local"

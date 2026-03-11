@@ -23,7 +23,13 @@ Independent skill debug workspace for product teams.
   - if a skill frontmatter includes a `tools:` section, those tool definitions are auto-registered into the workspace as stub tools during upload
   - skill-defined tools need their own `description` and `input_schema`; otherwise upload lint will fail
   - tool access is global inside the debugger; skill activation does not gate tool visibility
-- Workspace tools are currently debug stubs:
+- Built-in project tools are mixed:
+  - Google Maps is live against Google Maps APIs
+  - Yelp is live through Composio when configured
+  - `recognize_image` uses an OpenRouter VLM model when configured
+  - `get_calendar_events` / `create_calendar_event` run against a local in-memory debug calendar
+  - `canvas_card` returns the provided JSON payload directly as card output
+- Other manually added workspace tools remain debug stubs:
   - the tool name stays identical to production
   - arguments are preserved and logged
   - no production backend is called
@@ -48,13 +54,14 @@ If you want the debugger to use Claude Agent SDK through OpenRouter, and indepen
 OPENROUTER_API_KEY=...
 OPENROUTER_BASE_URL=https://openrouter.ai/api
 SKILL_DEBUGGER_MODEL=anthropic/claude-opus-4.6
+SKILL_DEBUGGER_VLM_MODEL=openai/gpt-4o-mini
 GOOGLE_MAPS_API_KEY=...
 COMPOSIO_API_KEY=...
 COMPOSIO_USER_ID=default
 ```
 
 The app maps them to the Anthropic-compatible environment variables required by Claude Code / Claude Agent SDK.
-Google Maps and Yelp tool loading no longer depends on the repo-root `config.py` or `src/*` modules.
+Google Maps, Yelp, OpenRouter VLM, and local debug tools no longer depend on the repo-root `config.py` or `src/*` modules.
 
 ## Skill-Defined Tools
 

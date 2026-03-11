@@ -39,6 +39,7 @@ class SkillDebuggerSettings:
     openrouter_api_key: str | None
     openrouter_base_url: str
     default_model: str | None
+    vlm_model: str | None = None
     google_maps_api_key: str | None = None
     composio_api_key: str | None = None
     composio_user_id: str = "default"
@@ -70,6 +71,8 @@ class SkillDebuggerSettings:
             )
         if self.default_model:
             env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = self.default_model
+        if self.vlm_model:
+            env["SKILL_DEBUGGER_VLM_MODEL"] = self.vlm_model
         if self.google_maps_api_key:
             env["GOOGLE_MAPS_API_KEY"] = self.google_maps_api_key
         if self.composio_api_key:
@@ -85,6 +88,7 @@ class SkillDebuggerSettings:
             "openrouter_enabled": self.openrouter_enabled,
             "openrouter_base_url": self.openrouter_base_url if self.openrouter_enabled else None,
             "default_model": self.default_model,
+            "vlm_model": self.vlm_model,
             "google_maps_enabled": self.google_maps_enabled,
             "composio_enabled": self.composio_enabled,
             "composio_user_id": self.composio_user_id if self.composio_enabled else None,
@@ -104,6 +108,11 @@ def load_skill_debugger_settings(base_dir: Path) -> SkillDebuggerSettings:
         or (merged.get("OPENROUTER_MODEL") or "").strip()
         or (DEFAULT_OPENROUTER_MODEL if openrouter_api_key else "")
     ) or None
+    vlm_model = (
+        (merged.get("SKILL_DEBUGGER_VLM_MODEL") or "").strip()
+        or (merged.get("OPENROUTER_VLM_MODEL") or "").strip()
+        or ""
+    ) or None
     google_maps_api_key = (merged.get("GOOGLE_MAPS_API_KEY") or "").strip() or None
     composio_api_key = (merged.get("COMPOSIO_API_KEY") or "").strip() or None
     composio_user_id = (merged.get("COMPOSIO_USER_ID") or "").strip() or "default"
@@ -117,6 +126,7 @@ def load_skill_debugger_settings(base_dir: Path) -> SkillDebuggerSettings:
         openrouter_api_key=openrouter_api_key,
         openrouter_base_url=openrouter_base_url,
         default_model=default_model,
+        vlm_model=vlm_model,
         google_maps_api_key=google_maps_api_key,
         composio_api_key=composio_api_key,
         composio_user_id=composio_user_id,
