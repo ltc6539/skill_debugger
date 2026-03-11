@@ -11,6 +11,7 @@ const state = {
   runtime: null,
   busy: false,
   pendingAssistantBubble: null,
+  editingSkillId: null,
 };
 
 const els = {
@@ -35,6 +36,13 @@ const els = {
   toolsList: document.getElementById("toolsList"),
   toolHints: document.getElementById("toolHints"),
   addToolButton: document.getElementById("addToolButton"),
+  skillEditorModal: document.getElementById("skillEditorModal"),
+  skillEditorTitle: document.getElementById("skillEditorTitle"),
+  skillEditorMeta: document.getElementById("skillEditorMeta"),
+  skillEditorInput: document.getElementById("skillEditorInput"),
+  closeSkillEditorButton: document.getElementById("closeSkillEditorButton"),
+  cancelSkillEditorButton: document.getElementById("cancelSkillEditorButton"),
+  saveSkillEditorButton: document.getElementById("saveSkillEditorButton"),
 };
 
 /* ---- helpers ---- */
@@ -131,6 +139,8 @@ function setBusy(nextBusy) {
   els.forcedSkillSelect.disabled = nextBusy || currentMode() !== "forced";
   if (els.toolNameInput) els.toolNameInput.disabled = nextBusy;
   if (els.addToolButton) els.addToolButton.disabled = nextBusy;
+  if (els.saveSkillEditorButton) els.saveSkillEditorButton.disabled = nextBusy;
+  if (els.skillEditorInput) els.skillEditorInput.disabled = nextBusy;
   document.getElementById("sendButton").disabled = nextBusy;
 }
 
@@ -190,14 +200,25 @@ function renderSkills() {
         <div class="tool-row-meta skill-lint-meta ${lintClass}">${lintSummary}</div>
         <div class="tool-row-meta">${declaredLabel}</div>
       </div>
-      <button class="tool-delete-btn" type="button" title="删除 skill" aria-label="删除 ${escapeHtml(skill.skill_id)}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="3 6 5 6 21 6"></polyline>
-          <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path>
-        </svg>
-      </button>
+      <div class="tool-row-actions">
+        <button class="tool-edit-btn" type="button" title="编辑 skill" aria-label="编辑 ${escapeHtml(skill.skill_id)}">编辑</button>
+        <button class="tool-delete-btn" type="button" title="删除 skill" aria-label="删除 ${escapeHtml(skill.skill_id)}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path>
+          </svg>
+        </button>
+      </div>
     `;
+
+    row.querySelector(".tool-edit-btn").addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openSkillEditor(skill.skill_id).catch((error) => {
+        window.alert(error.message);
+      });
+    });
 
     row.querySelector(".tool-delete-btn").addEventListener("click", (event) => {
       event.preventDefault();
@@ -463,6 +484,19 @@ async function fetchJson(url, options) {
   return response.json();
 }
 
+function openSkillEditorModal() {
+  els.skillEditorModal.classList.remove("hidden");
+  els.skillEditorModal.setAttribute("aria-hidden", "false");
+}
+
+function closeSkillEditorModal() {
+  state.editingSkillId = null;
+  els.skillEditorInput.value = "";
+  els.skillEditorMeta.textContent = "";
+  els.skillEditorModal.classList.add("hidden");
+  els.skillEditorModal.setAttribute("aria-hidden", "true");
+}
+
 /* ---- actions ---- */
 
 async function bootstrap() {
@@ -555,6 +589,48 @@ async function deleteSkill(skillId) {
     { method: "DELETE" }
   );
   renderAll();
+}
+
+async function openSkillEditor(skillId) {
+  if (!state.activeWorkspaceId || state.busy) return;
+  const payload = await fetchJson(
+    `/api/workspaces/${state.activeWorkspaceId}/skills/${encodeURIComponent(skillId)}/document`
+  );
+  state.editingSkillId = payload.skill.skill_id;
+  els.skillEditorTitle.textContent = `编辑 Skill · ${payload.skill.skill_id}`;
+  els.skillEditorMeta.textContent = payload.skill.description || "无描述";
+  els.skillEditorInput.value = payload.content || "";
+  openSkillEditorModal();
+  els.skillEditorInput.focus();
+}
+
+async function saveSkillEditor() {
+  if (!state.activeWorkspaceId || !state.editingSkillId || state.busy) return;
+  const previousSkillId = state.editingSkillId;
+  const currentForced = els.forcedSkillSelect.value;
+
+  setBusy(true);
+  try {
+    const payload = await fetchJson(
+      `/api/workspaces/${state.activeWorkspaceId}/skills/${encodeURIComponent(previousSkillId)}/document`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: els.skillEditorInput.value }),
+      }
+    );
+    state.current = payload.current;
+    closeSkillEditorModal();
+    renderAll();
+    if (currentMode() === "forced" && currentForced === previousSkillId) {
+      els.forcedSkillSelect.value = payload.updated_skill_id;
+    }
+    if (payload.updated_skill_id !== previousSkillId) {
+      window.alert(`Skill 已保存，并更新为：${payload.updated_skill_id}`);
+    }
+  } finally {
+    setBusy(false);
+  }
 }
 
 async function addTool(event) {
@@ -723,6 +799,14 @@ if (els.toolForm) {
     addTool(event).catch((error) => window.alert(error.message));
   });
 }
+els.closeSkillEditorButton.addEventListener("click", closeSkillEditorModal);
+els.cancelSkillEditorButton.addEventListener("click", closeSkillEditorModal);
+els.saveSkillEditorButton.addEventListener("click", () => {
+  saveSkillEditor().catch((error) => {
+    window.alert(error.message);
+  });
+});
+els.skillEditorModal.querySelector(".editor-backdrop").addEventListener("click", closeSkillEditorModal);
 
 els.chatForm.addEventListener("submit", (event) => {
   sendChat(event).catch((error) => {
@@ -738,6 +822,12 @@ els.chatForm.addEventListener("submit", (event) => {
     setBusy(false);
     renderAll();
   });
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !els.skillEditorModal.classList.contains("hidden")) {
+    closeSkillEditorModal();
+  }
 });
 
 els.chatInput.addEventListener("keydown", (event) => {

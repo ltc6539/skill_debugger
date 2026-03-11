@@ -118,6 +118,30 @@
       </div>
     </div>
 
+    <div id="skillEditorModal" class="editor-modal hidden" aria-hidden="true">
+      <div class="editor-backdrop"></div>
+      <section class="editor-panel" role="dialog" aria-modal="true" aria-labelledby="skillEditorTitle">
+        <div class="editor-header">
+          <div class="editor-header-copy">
+            <div id="skillEditorTitle" class="editor-title">编辑 Skill</div>
+            <div id="skillEditorMeta" class="editor-meta"></div>
+          </div>
+          <button id="closeSkillEditorButton" class="icon-btn" type="button" title="关闭编辑器">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+        <div class="editor-note">直接编辑完整 `SKILL.md` 内容。保存后当前 workspace 会立即刷新，可以继续测试。</div>
+        <textarea id="skillEditorInput" class="editor-textarea" spellcheck="false"></textarea>
+        <div class="editor-actions">
+          <button id="cancelSkillEditorButton" class="sidebar-btn" type="button">取消</button>
+          <button id="saveSkillEditorButton" class="sidebar-btn link-btn" type="button">保存 Skill</button>
+        </div>
+      </section>
+    </div>
+
     <script src="/static/app.js" defer></script>
   </body>
 </html>

@@ -84,6 +84,9 @@ class WorkspaceStore:
     def tools_path(self, workspace_id: str) -> Path:
         return self.workspace_dir(workspace_id) / "tools.json"
 
+    def skill_dir(self, workspace_id: str, skill_dir_name: str) -> Path:
+        return self.skills_dir(workspace_id) / skill_dir_name
+
     def get_workspace(self, workspace_id: str) -> dict:
         path = self.workspace_dir(workspace_id) / "workspace.json"
         if not path.exists():
@@ -162,10 +165,31 @@ class WorkspaceStore:
     def write_skill(self, workspace_id: str, skill_dir_name: str, content: str) -> Path:
         return self.write_skill_package(workspace_id, skill_dir_name, {"SKILL.md": content.encode("utf-8")}) / "SKILL.md"
 
+    def read_skill_text(self, workspace_id: str, skill_dir_name: str) -> str:
+        self.get_workspace(workspace_id)
+        self.ensure_native_skill_layout(workspace_id)
+        path = self.skill_dir(workspace_id, skill_dir_name) / "SKILL.md"
+        if not path.exists():
+            raise KeyError(f"Skill not found: {skill_dir_name}")
+        return path.read_text(encoding="utf-8")
+
+    def read_skill_package(self, workspace_id: str, skill_dir_name: str) -> dict[str, bytes]:
+        self.get_workspace(workspace_id)
+        self.ensure_native_skill_layout(workspace_id)
+        target_dir = self.skill_dir(workspace_id, skill_dir_name)
+        if not target_dir.exists():
+            raise KeyError(f"Skill not found: {skill_dir_name}")
+        files: dict[str, bytes] = {}
+        for path in sorted(target_dir.rglob("*")):
+            if not path.is_file():
+                continue
+            files[path.relative_to(target_dir).as_posix()] = path.read_bytes()
+        return files
+
     def write_skill_package(self, workspace_id: str, skill_dir_name: str, files: dict[str, bytes]) -> Path:
         self.get_workspace(workspace_id)
         self.ensure_native_skill_layout(workspace_id)
-        target_dir = self.skills_dir(workspace_id) / skill_dir_name
+        target_dir = self.skill_dir(workspace_id, skill_dir_name)
         if target_dir.exists():
             shutil.rmtree(target_dir)
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -183,7 +207,7 @@ class WorkspaceStore:
     def delete_skill(self, workspace_id: str, skill_dir_name: str) -> None:
         self.get_workspace(workspace_id)
         self.ensure_native_skill_layout(workspace_id)
-        target_dir = self.skills_dir(workspace_id) / skill_dir_name
+        target_dir = self.skill_dir(workspace_id, skill_dir_name)
         if not target_dir.exists():
             raise KeyError(f"Skill not found: {skill_dir_name}")
         shutil.rmtree(target_dir)

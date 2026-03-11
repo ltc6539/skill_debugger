@@ -351,6 +351,53 @@ class SkillDebuggerService:
         self._reset_runtime_projects(workspace_id)
         return self.get_workspace_state(workspace_id)
 
+    def get_skill_document(self, workspace_id: str, skill_id: str) -> dict[str, Any]:
+        normalized = slugify(skill_id)
+        registry = self._load_registry(workspace_id)
+        meta = registry.get_skill_meta(normalized)
+        if meta is None:
+            raise KeyError(f"Skill not found: {skill_id}")
+        content = self.store.read_skill_text(workspace_id, normalized)
+        return {
+            "skill": meta.to_dict(),
+            "content": content,
+        }
+
+    def update_skill_document(self, workspace_id: str, skill_id: str, content: str) -> dict[str, Any]:
+        normalized = slugify(skill_id)
+        registry = self._load_registry(workspace_id)
+        meta = registry.get_skill_meta(normalized)
+        if meta is None:
+            raise KeyError(f"Skill not found: {skill_id}")
+
+        package_files = self.store.read_skill_package(workspace_id, normalized)
+        package_files["SKILL.md"] = content.encode("utf-8")
+
+        lint_report = lint_skill_package(
+            normalized,
+            package_files,
+            source_kind="folder",
+        )
+        if not lint_report.valid:
+            raise ValueError(self._format_upload_lint_errors([lint_report]))
+
+        parsed = UploadedSkillRegistry.parse_skill_text(content, fallback_name=normalized)
+        next_skill_id = parsed.skill_id
+        if next_skill_id != normalized and registry.has_skill(next_skill_id):
+            raise ValueError(f"Cannot rename skill to `{next_skill_id}` because that skill already exists.")
+
+        self.store.write_skill_package(workspace_id, next_skill_id, package_files)
+        if next_skill_id != normalized:
+            self.store.delete_skill(workspace_id, normalized)
+
+        self.store.invalidate_runtime_session(workspace_id)
+        self._reset_runtime_projects(workspace_id)
+        return {
+            "updated_skill_id": next_skill_id,
+            "previous_skill_id": normalized,
+            "current": self.get_workspace_state(workspace_id),
+        }
+
     def add_tool(self, workspace_id: str, name: str, description: str | None = None) -> dict[str, Any]:
         registry = self._load_tool_registry(workspace_id)
         tool_name = normalize_tool_name(name)

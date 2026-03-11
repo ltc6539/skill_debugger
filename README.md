@@ -85,12 +85,15 @@ On upload, the debugger will:
 - auto-register tools defined under `tools`
 - preserve existing manual/live tools when names collide
 
+For a full copy-paste starter, see `skill_debugger/SKILL_TEMPLATE.md`.
+
 ## Files
 
 - `skill_debugger/app.py`: FastAPI app and API routes
 - `skill_debugger/service.py`: Claude-native runtime orchestration, forced-skill projection, and trace collection
 - `skill_debugger/project_tool_runtime.py`: standalone Google Maps / Composio Yelp runtime
 - `skill_debugger/google_maps_tools.py`: local Google Maps direct tool implementations
+- `skill_debugger/SKILL_TEMPLATE.md`: standard template for new uploaded skills and custom tool definitions
 - `skill_debugger/skill_registry.py`: uploaded `SKILL.md` parser
 - `skill_debugger/store.py`: workspace/session persistence and `.claude/skills` storage layout
 - `skill_debugger/static/*`: frontend UI

@@ -49,6 +49,10 @@ class CreateToolRequest(BaseModel):
     description: str | None = None
 
 
+class UpdateSkillDocumentRequest(BaseModel):
+    content: str
+
+
 class SyncProjectToolsRequest(BaseModel):
     presets: list[str] | None = None
 
@@ -127,6 +131,28 @@ async def delete_skill(workspace_id: str, skill_id: str) -> dict:
         return service.delete_skill(workspace_id, skill_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/workspaces/{workspace_id}/skills/{skill_id}/document")
+async def get_skill_document(workspace_id: str, skill_id: str) -> dict:
+    try:
+        return service.get_skill_document(workspace_id, skill_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.put("/api/workspaces/{workspace_id}/skills/{skill_id}/document")
+async def update_skill_document(
+    workspace_id: str,
+    skill_id: str,
+    payload: UpdateSkillDocumentRequest,
+) -> dict:
+    try:
+        return service.update_skill_document(workspace_id, skill_id, payload.content)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/workspaces/{workspace_id}/tools")
