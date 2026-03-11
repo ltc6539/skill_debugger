@@ -103,7 +103,7 @@ async def create_workspace(payload: CreateWorkspaceRequest) -> dict:
 @app.delete("/api/workspaces/{workspace_id}")
 async def delete_workspace(workspace_id: str) -> dict:
     try:
-        return service.delete_workspace(workspace_id)
+        return await service.delete_workspace(workspace_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -129,7 +129,7 @@ async def upload_skills(
                 continue
             relative_path = paths[index] if index < len(paths) and paths[index] else upload.filename
             payloads.append((relative_path, await upload.read()))
-        return service.upload_skills(workspace_id, payloads)
+        return await service.upload_skills(workspace_id, payloads)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except UnicodeDecodeError as exc:
@@ -141,7 +141,7 @@ async def upload_skills(
 @app.delete("/api/workspaces/{workspace_id}/skills/{skill_id}")
 async def delete_skill(workspace_id: str, skill_id: str) -> dict:
     try:
-        return service.delete_skill(workspace_id, skill_id)
+        return await service.delete_skill(workspace_id, skill_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -161,7 +161,7 @@ async def update_skill_document(
     payload: UpdateSkillDocumentRequest,
 ) -> dict:
     try:
-        return service.update_skill_document(workspace_id, skill_id, payload.content)
+        return await service.update_skill_document(workspace_id, skill_id, payload.content)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -171,7 +171,7 @@ async def update_skill_document(
 @app.post("/api/workspaces/{workspace_id}/tools")
 async def create_tool(workspace_id: str, payload: CreateToolRequest) -> dict:
     try:
-        return service.add_tool(workspace_id, payload.name, payload.description)
+        return await service.add_tool(workspace_id, payload.name, payload.description)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -181,7 +181,7 @@ async def create_tool(workspace_id: str, payload: CreateToolRequest) -> dict:
 @app.delete("/api/workspaces/{workspace_id}/tools/{tool_name}")
 async def delete_tool(workspace_id: str, tool_name: str) -> dict:
     try:
-        return service.delete_tool(workspace_id, tool_name)
+        return await service.delete_tool(workspace_id, tool_name)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -189,7 +189,7 @@ async def delete_tool(workspace_id: str, tool_name: str) -> dict:
 @app.post("/api/workspaces/{workspace_id}/tools/project-sync")
 async def sync_project_tools(workspace_id: str, payload: SyncProjectToolsRequest) -> dict:
     try:
-        return service.sync_project_tool_presets(workspace_id, payload.presets)
+        return await service.sync_project_tool_presets(workspace_id, payload.presets)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -199,7 +199,7 @@ async def sync_project_tools(workspace_id: str, payload: SyncProjectToolsRequest
 @app.post("/api/workspaces/{workspace_id}/context/clear")
 async def clear_context(workspace_id: str) -> dict:
     try:
-        return service.clear_context(workspace_id)
+        return await service.clear_context(workspace_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

@@ -19,6 +19,8 @@ Independent skill debug workspace for product teams.
   - uploaded skill packages are written into the workspace `.claude/skills/` directory
   - Claude discovers skills through `setting_sources=["project"]`
   - skill activation happens through native `SKILL.md` reads instead of a custom `activate_skill` tool
+  - the debugger no longer enables the full `claude_code` built-in tool preset
+  - the only Claude built-in tool exposed by default is `Skill`
   - `allowed-tools` in frontmatter remain skill-declared metadata
   - if a skill frontmatter includes a `tools:` section, those tool definitions are auto-registered into the workspace as stub tools during upload
   - skill-defined tools need their own `description` and `input_schema`; otherwise upload lint will fail

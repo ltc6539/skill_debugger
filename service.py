@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 import io
 import json
 import re
 import shutil
 import zipfile
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+from threading import Lock
 from typing import Any, Literal
 
 from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server, tool
@@ -36,7 +39,7 @@ from skill_debugger.tool_registry import (
 )
 
 DebuggerMode = Literal["agent", "forced"]
-DEFAULT_TOOLS_PRESET = {"type": "preset", "preset": "claude_code"}
+EXPLICIT_BUILTIN_TOOLS = ["Skill"]
 SKILL_PATH_PATTERN = re.compile(r"(?:^|[\\/])\.claude[\\/]skills[\\/](?P<skill>[^\\/]+)")
 
 
@@ -224,6 +227,10 @@ class ToolTraceCollector:
         return None
 
 
+def _sdk_workspace_tool_name(tool_name: str) -> str:
+    return f"mcp__skill_debugger__{tool_name}"
+
+
 @dataclass
 class StubToolRuntime:
     workspace_skill_ids: list[str]
@@ -261,6 +268,22 @@ class SkillDebuggerService:
         self.settings = settings
         self.runtime = runtime or ClaudeSdkRuntime()
         self.project_tool_runtime = project_tool_runtime or ProjectToolRuntime(settings)
+        self._workspace_write_locks: dict[str, asyncio.Lock] = {}
+        self._workspace_write_locks_guard = Lock()
+
+    def _get_workspace_write_lock(self, workspace_id: str) -> asyncio.Lock:
+        with self._workspace_write_locks_guard:
+            lock = self._workspace_write_locks.get(workspace_id)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._workspace_write_locks[workspace_id] = lock
+            return lock
+
+    @asynccontextmanager
+    async def _workspace_write(self, workspace_id: str):
+        lock = self._get_workspace_write_lock(workspace_id)
+        async with lock:
+            yield
 
     def bootstrap(self) -> dict[str, Any]:
         current = self.store.ensure_default_workspace()
@@ -276,6 +299,7 @@ class SkillDebuggerService:
         return {
             "claude_cli_path": shutil.which("claude"),
             "runtime_mode": "claude_native",
+            "builtin_tools": list(EXPLICIT_BUILTIN_TOOLS),
             **self.settings.runtime_status(),
         }
 
@@ -283,25 +307,21 @@ class SkillDebuggerService:
         workspace = self.store.create_workspace(name)
         return self.get_workspace_state(workspace["workspace_id"])
 
-    def delete_workspace(self, workspace_id: str) -> dict[str, Any]:
-        self.store.delete_workspace(workspace_id)
-        current = self.store.ensure_default_workspace()
-        workspaces = self.store.list_workspaces()
-        return {
-            "deleted_workspace_id": workspace_id,
-            "workspaces": workspaces,
-            "current_workspace_id": current["workspace_id"],
-            "current": self.get_workspace_state(current["workspace_id"]),
-            "runtime": self.runtime_status(),
-        }
-
     def get_workspace_state(self, workspace_id: str) -> dict[str, Any]:
+        return self._get_workspace_state(workspace_id, persist_updates=False)
+
+    def _get_workspace_state(
+        self,
+        workspace_id: str,
+        *,
+        persist_updates: bool,
+    ) -> dict[str, Any]:
         workspace = self.store.get_workspace(workspace_id)
         registry = self._load_registry(workspace_id)
         tool_registry = self._sync_declared_skill_tools(
             workspace_id,
             registry=registry,
-            persist_updates=True,
+            persist_updates=persist_updates,
         )
         session = self.store.get_session(workspace_id)
         return {
@@ -313,43 +333,61 @@ class SkillDebuggerService:
             "runtime": self.runtime_status(),
         }
 
-    def clear_context(self, workspace_id: str) -> dict[str, Any]:
-        self.store.clear_session(workspace_id)
-        return self.get_workspace_state(workspace_id)
+    async def delete_workspace(self, workspace_id: str) -> dict[str, Any]:
+        async with self._workspace_write(workspace_id):
+            self.store.delete_workspace(workspace_id)
+            current = self.store.ensure_default_workspace()
+            workspaces = self.store.list_workspaces()
+            return {
+                "deleted_workspace_id": workspace_id,
+                "workspaces": workspaces,
+                "current_workspace_id": current["workspace_id"],
+                "current": self.get_workspace_state(current["workspace_id"]),
+                "runtime": self.runtime_status(),
+            }
 
-    def upload_skills(self, workspace_id: str, files: list[tuple[str, bytes]]) -> dict[str, Any]:
-        self.store.ensure_native_skill_layout(workspace_id)
-        packages = self._build_skill_packages(files)
-        if not packages:
-            raise ValueError("No skill package detected. Upload a skill folder, a zip archive, or one or more SKILL.md files.")
-        lint_reports = [
-            lint_skill_package(
-                package.package_name,
-                package.files,
-                source_kind=package.source_kind,
-            )
-            for package in packages
-        ]
-        invalid_reports = [report for report in lint_reports if not report.valid]
-        if invalid_reports:
-            raise ValueError(self._format_upload_lint_errors(invalid_reports))
-        for package in packages:
-            skill_bytes = package.files.get("SKILL.md")
-            if skill_bytes is None:
-                raise ValueError(f"Skill package is missing SKILL.md: {package.package_name}")
-            text = skill_bytes.decode("utf-8")
-            parsed = UploadedSkillRegistry.parse_skill_text(text, fallback_name=package.package_name)
-            self.store.write_skill_package(workspace_id, parsed.skill_id, package.files)
-        self.store.invalidate_runtime_session(workspace_id)
-        self._reset_runtime_projects(workspace_id)
-        return self.get_workspace_state(workspace_id)
+    async def clear_context(self, workspace_id: str) -> dict[str, Any]:
+        async with self._workspace_write(workspace_id):
+            self.store.clear_session(workspace_id)
+            return self._get_workspace_state(workspace_id, persist_updates=True)
 
-    def delete_skill(self, workspace_id: str, skill_id: str) -> dict[str, Any]:
-        normalized = slugify(skill_id)
-        self.store.delete_skill(workspace_id, normalized)
-        self.store.invalidate_runtime_session(workspace_id)
-        self._reset_runtime_projects(workspace_id)
-        return self.get_workspace_state(workspace_id)
+    async def upload_skills(self, workspace_id: str, files: list[tuple[str, bytes]]) -> dict[str, Any]:
+        async with self._workspace_write(workspace_id):
+            self.store.ensure_native_skill_layout(workspace_id)
+            packages = self._build_skill_packages(files)
+            if not packages:
+                raise ValueError(
+                    "No skill package detected. Upload a skill folder, a zip archive, or one or more SKILL.md files."
+                )
+            lint_reports = [
+                lint_skill_package(
+                    package.package_name,
+                    package.files,
+                    source_kind=package.source_kind,
+                )
+                for package in packages
+            ]
+            invalid_reports = [report for report in lint_reports if not report.valid]
+            if invalid_reports:
+                raise ValueError(self._format_upload_lint_errors(invalid_reports))
+            for package in packages:
+                skill_bytes = package.files.get("SKILL.md")
+                if skill_bytes is None:
+                    raise ValueError(f"Skill package is missing SKILL.md: {package.package_name}")
+                text = skill_bytes.decode("utf-8")
+                parsed = UploadedSkillRegistry.parse_skill_text(text, fallback_name=package.package_name)
+                self.store.write_skill_package(workspace_id, parsed.skill_id, package.files)
+            self.store.invalidate_runtime_session(workspace_id)
+            self._reset_runtime_projects(workspace_id)
+            return self._get_workspace_state(workspace_id, persist_updates=True)
+
+    async def delete_skill(self, workspace_id: str, skill_id: str) -> dict[str, Any]:
+        async with self._workspace_write(workspace_id):
+            normalized = slugify(skill_id)
+            self.store.delete_skill(workspace_id, normalized)
+            self.store.invalidate_runtime_session(workspace_id)
+            self._reset_runtime_projects(workspace_id)
+            return self._get_workspace_state(workspace_id, persist_updates=True)
 
     def get_skill_document(self, workspace_id: str, skill_id: str) -> dict[str, Any]:
         normalized = slugify(skill_id)
@@ -363,79 +401,83 @@ class SkillDebuggerService:
             "content": content,
         }
 
-    def update_skill_document(self, workspace_id: str, skill_id: str, content: str) -> dict[str, Any]:
-        normalized = slugify(skill_id)
-        registry = self._load_registry(workspace_id)
-        meta = registry.get_skill_meta(normalized)
-        if meta is None:
-            raise KeyError(f"Skill not found: {skill_id}")
+    async def update_skill_document(self, workspace_id: str, skill_id: str, content: str) -> dict[str, Any]:
+        async with self._workspace_write(workspace_id):
+            normalized = slugify(skill_id)
+            registry = self._load_registry(workspace_id)
+            meta = registry.get_skill_meta(normalized)
+            if meta is None:
+                raise KeyError(f"Skill not found: {skill_id}")
 
-        package_files = self.store.read_skill_package(workspace_id, normalized)
-        package_files["SKILL.md"] = content.encode("utf-8")
+            package_files = self.store.read_skill_package(workspace_id, normalized)
+            package_files["SKILL.md"] = content.encode("utf-8")
 
-        lint_report = lint_skill_package(
-            normalized,
-            package_files,
-            source_kind="folder",
-        )
-        if not lint_report.valid:
-            raise ValueError(self._format_upload_lint_errors([lint_report]))
-
-        parsed = UploadedSkillRegistry.parse_skill_text(content, fallback_name=normalized)
-        next_skill_id = parsed.skill_id
-        if next_skill_id != normalized and registry.has_skill(next_skill_id):
-            raise ValueError(f"Cannot rename skill to `{next_skill_id}` because that skill already exists.")
-
-        self.store.write_skill_package(workspace_id, next_skill_id, package_files)
-        if next_skill_id != normalized:
-            self.store.delete_skill(workspace_id, normalized)
-
-        self.store.invalidate_runtime_session(workspace_id)
-        self._reset_runtime_projects(workspace_id)
-        return {
-            "updated_skill_id": next_skill_id,
-            "previous_skill_id": normalized,
-            "current": self.get_workspace_state(workspace_id),
-        }
-
-    def add_tool(self, workspace_id: str, name: str, description: str | None = None) -> dict[str, Any]:
-        registry = self._load_tool_registry(workspace_id)
-        tool_name = normalize_tool_name(name)
-        if not tool_name:
-            raise ValueError("Tool name cannot be empty.")
-        meta = self.project_tool_runtime.hydrate_meta(
-            WorkspaceToolMeta(
-                name=tool_name,
-                description=str(description or "").strip(),
-                execution_mode="stub",
-                enabled=True,
-                source="manual",
+            lint_report = lint_skill_package(
+                normalized,
+                package_files,
+                source_kind="folder",
             )
-        )
-        registry.upsert(meta)
-        self.store.save_tool_registry(workspace_id, registry.to_payload())
-        self.store.invalidate_runtime_session(workspace_id)
-        return self.get_workspace_state(workspace_id)
+            if not lint_report.valid:
+                raise ValueError(self._format_upload_lint_errors([lint_report]))
 
-    def delete_tool(self, workspace_id: str, tool_name: str) -> dict[str, Any]:
-        registry = self._load_tool_registry(workspace_id)
-        registry.delete(tool_name)
-        self.store.save_tool_registry(workspace_id, registry.to_payload())
-        self.store.invalidate_runtime_session(workspace_id)
-        return self.get_workspace_state(workspace_id)
+            parsed = UploadedSkillRegistry.parse_skill_text(content, fallback_name=normalized)
+            next_skill_id = parsed.skill_id
+            if next_skill_id != normalized and registry.has_skill(next_skill_id):
+                raise ValueError(f"Cannot rename skill to `{next_skill_id}` because that skill already exists.")
 
-    def sync_project_tool_presets(
+            self.store.write_skill_package(workspace_id, next_skill_id, package_files)
+            if next_skill_id != normalized:
+                self.store.delete_skill(workspace_id, normalized)
+
+            self.store.invalidate_runtime_session(workspace_id)
+            self._reset_runtime_projects(workspace_id)
+            return {
+                "updated_skill_id": next_skill_id,
+                "previous_skill_id": normalized,
+                "current": self._get_workspace_state(workspace_id, persist_updates=True),
+            }
+
+    async def add_tool(self, workspace_id: str, name: str, description: str | None = None) -> dict[str, Any]:
+        async with self._workspace_write(workspace_id):
+            registry = self._load_tool_registry(workspace_id)
+            tool_name = normalize_tool_name(name)
+            if not tool_name:
+                raise ValueError("Tool name cannot be empty.")
+            meta = self.project_tool_runtime.hydrate_meta(
+                WorkspaceToolMeta(
+                    name=tool_name,
+                    description=str(description or "").strip(),
+                    execution_mode="stub",
+                    enabled=True,
+                    source="manual",
+                )
+            )
+            registry.upsert(meta)
+            self.store.save_tool_registry(workspace_id, registry.to_payload())
+            self.store.invalidate_runtime_session(workspace_id)
+            return self._get_workspace_state(workspace_id, persist_updates=True)
+
+    async def delete_tool(self, workspace_id: str, tool_name: str) -> dict[str, Any]:
+        async with self._workspace_write(workspace_id):
+            registry = self._load_tool_registry(workspace_id)
+            registry.delete(tool_name)
+            self.store.save_tool_registry(workspace_id, registry.to_payload())
+            self.store.invalidate_runtime_session(workspace_id)
+            return self._get_workspace_state(workspace_id, persist_updates=True)
+
+    async def sync_project_tool_presets(
         self,
         workspace_id: str,
         preset_names: list[str] | None = None,
     ) -> dict[str, Any]:
-        registry = self._load_tool_registry(workspace_id)
-        selected = preset_names or get_project_tool_preset_names()
-        for meta in get_project_tool_metas(selected):
-            registry.upsert(self.project_tool_runtime.hydrate_meta(meta))
-        self.store.save_tool_registry(workspace_id, registry.to_payload())
-        self.store.invalidate_runtime_session(workspace_id)
-        return self.get_workspace_state(workspace_id)
+        async with self._workspace_write(workspace_id):
+            registry = self._load_tool_registry(workspace_id)
+            selected = preset_names or get_project_tool_preset_names()
+            for meta in get_project_tool_metas(selected):
+                registry.upsert(self.project_tool_runtime.hydrate_meta(meta))
+            self.store.save_tool_registry(workspace_id, registry.to_payload())
+            self.store.invalidate_runtime_session(workspace_id)
+            return self._get_workspace_state(workspace_id, persist_updates=True)
 
     async def run_chat(
         self,
@@ -446,129 +488,130 @@ class SkillDebuggerService:
         forced_skill_id: str | None = None,
         model: str | None = None,
     ):
-        prompt = message.strip()
-        if not prompt:
-            raise ValueError("Message cannot be empty.")
+        async with self._workspace_write(workspace_id):
+            prompt = message.strip()
+            if not prompt:
+                raise ValueError("Message cannot be empty.")
 
-        registry = self._load_registry(workspace_id)
-        workspace_skill_ids = [meta.skill_id for meta in registry.skills]
-        visible_skill_ids = list(workspace_skill_ids)
+            registry = self._load_registry(workspace_id)
+            workspace_skill_ids = [meta.skill_id for meta in registry.skills]
+            visible_skill_ids = list(workspace_skill_ids)
 
-        if mode == "forced":
-            if not forced_skill_id:
-                raise ValueError("Forced mode requires a forced_skill_id.")
-            forced_skill_id = slugify(forced_skill_id)
-            if not registry.has_skill(forced_skill_id):
-                raise ValueError(f"Forced skill not found: {forced_skill_id}")
-            visible_skill_ids = [forced_skill_id]
+            if mode == "forced":
+                if not forced_skill_id:
+                    raise ValueError("Forced mode requires a forced_skill_id.")
+                forced_skill_id = slugify(forced_skill_id)
+                if not registry.has_skill(forced_skill_id):
+                    raise ValueError(f"Forced skill not found: {forced_skill_id}")
+                visible_skill_ids = [forced_skill_id]
 
-        runtime_project_dir = self._prepare_runtime_project(
-            workspace_id=workspace_id,
-            registry=registry,
-            mode=mode,
-            visible_skill_ids=visible_skill_ids,
-        )
+            runtime_project_dir = self._prepare_runtime_project(
+                workspace_id=workspace_id,
+                registry=registry,
+                mode=mode,
+                visible_skill_ids=visible_skill_ids,
+            )
 
-        session = self.store.get_session(workspace_id)
-        tool_registry = self._sync_declared_skill_tools(
-            workspace_id,
-            registry=registry,
-            persist_updates=True,
-        )
-        stub_runtime = StubToolRuntime(
-            workspace_skill_ids=workspace_skill_ids,
-            visible_skill_ids=visible_skill_ids,
-        )
-        trace_collector = ToolTraceCollector()
-        tools = self._build_tools(tool_registry, stub_runtime, trace_collector)
-        mcp_servers = {"skill_debugger": create_sdk_mcp_server("skill-debugger", tools=tools)} if tools else {}
-        effective_model = model or self.settings.default_model
+            session = self.store.get_session(workspace_id)
+            tool_registry = self._sync_declared_skill_tools(
+                workspace_id,
+                registry=registry,
+                persist_updates=True,
+            )
+            stub_runtime = StubToolRuntime(
+                workspace_skill_ids=workspace_skill_ids,
+                visible_skill_ids=visible_skill_ids,
+            )
+            trace_collector = ToolTraceCollector()
+            tools = self._build_tools(tool_registry, stub_runtime, trace_collector)
+            mcp_servers = {"skill_debugger": create_sdk_mcp_server("skill-debugger", tools=tools)} if tools else {}
+            effective_model = model or self.settings.default_model
 
-        options = ClaudeAgentOptions(
-            tools=DEFAULT_TOOLS_PRESET,
-            allowed_tools=["Skill", *[tool_def.name for tool_def in tools]],
-            mcp_servers=mcp_servers,
-            system_prompt=self._build_system_prompt(mode, visible_skill_ids),
-            cwd=str(runtime_project_dir),
-            model=effective_model,
-            max_turns=10,
-            include_partial_messages=True,
-            resume=(
-                session.get("claude_session_id")
-                if self._can_resume_session(session, mode, forced_skill_id, effective_model)
-                else None
-            ),
-            setting_sources=["project"],
-            env=self.settings.runtime_env(),
-            permission_mode="bypassPermissions",
-        )
+            options = ClaudeAgentOptions(
+                tools=list(EXPLICIT_BUILTIN_TOOLS),
+                allowed_tools=[*EXPLICIT_BUILTIN_TOOLS, *[tool_def.name for tool_def in tools]],
+                mcp_servers=mcp_servers,
+                system_prompt=self._build_system_prompt(mode, visible_skill_ids),
+                cwd=str(runtime_project_dir),
+                model=effective_model,
+                max_turns=10,
+                include_partial_messages=True,
+                resume=(
+                    session.get("claude_session_id")
+                    if self._can_resume_session(session, mode, forced_skill_id, effective_model)
+                    else None
+                ),
+                setting_sources=["project"],
+                env=self.settings.runtime_env(),
+                permission_mode="bypassPermissions",
+            )
 
-        streamed_text_parts: list[str] = []
-        final_text_parts: list[str] = []
-        result_text: str | None = None
-        claude_session_id = session.get("claude_session_id")
+            streamed_text_parts: list[str] = []
+            final_text_parts: list[str] = []
+            result_text: str | None = None
+            claude_session_id = session.get("claude_session_id")
 
-        yield {
-            "event": "meta",
-            "data": {
-                "mode": mode,
-                "forced_skill_id": forced_skill_id,
-                "model": effective_model,
-                "visible_skill_ids": visible_skill_ids,
-            },
-        }
+            yield {
+                "event": "meta",
+                "data": {
+                    "mode": mode,
+                    "forced_skill_id": forced_skill_id,
+                    "model": effective_model,
+                    "visible_skill_ids": visible_skill_ids,
+                },
+            }
 
-        async for sdk_message in self.runtime.stream(prompt, options):
-            if isinstance(sdk_message, StreamEvent):
-                delta = _extract_text_delta(sdk_message.event)
-                if delta:
-                    streamed_text_parts.append(delta)
-                    yield {"event": "token", "data": {"delta": delta}}
+            async for sdk_message in self.runtime.stream(prompt, options):
+                if isinstance(sdk_message, StreamEvent):
+                    delta = _extract_text_delta(sdk_message.event)
+                    if delta:
+                        streamed_text_parts.append(delta)
+                        yield {"event": "token", "data": {"delta": delta}}
 
-            if isinstance(sdk_message, AssistantMessage):
-                for block in sdk_message.content:
-                    if isinstance(block, TextBlock):
-                        final_text_parts.append(block.text)
-                    elif isinstance(block, ToolUseBlock):
-                        trace_collector.record_tool_use(block)
-                    elif isinstance(block, ToolResultBlock):
-                        trace_collector.record_tool_result(block)
-                    elif isinstance(block, ThinkingBlock):
-                        continue
+                if isinstance(sdk_message, AssistantMessage):
+                    for block in sdk_message.content:
+                        if isinstance(block, TextBlock):
+                            final_text_parts.append(block.text)
+                        elif isinstance(block, ToolUseBlock):
+                            trace_collector.record_tool_use(block)
+                        elif isinstance(block, ToolResultBlock):
+                            trace_collector.record_tool_result(block)
+                        elif isinstance(block, ThinkingBlock):
+                            continue
 
-            if isinstance(sdk_message, ResultMessage):
-                claude_session_id = sdk_message.session_id
-                result_text = sdk_message.result
+                if isinstance(sdk_message, ResultMessage):
+                    claude_session_id = sdk_message.session_id
+                    result_text = sdk_message.result
 
+                for trace_event in trace_collector.drain_pending_events():
+                    yield {"event": "trace", "data": trace_event}
+
+            trace_collector.finalize_pending()
             for trace_event in trace_collector.drain_pending_events():
                 yield {"event": "trace", "data": trace_event}
 
-        trace_collector.finalize_pending()
-        for trace_event in trace_collector.drain_pending_events():
-            yield {"event": "trace", "data": trace_event}
+            assistant_text = "".join(streamed_text_parts).strip()
+            if not assistant_text:
+                assistant_text = "".join(final_text_parts).strip() or (result_text or "").strip()
 
-        assistant_text = "".join(streamed_text_parts).strip()
-        if not assistant_text:
-            assistant_text = "".join(final_text_parts).strip() or (result_text or "").strip()
-
-        session = self.store.append_turn(
-            workspace_id,
-            user_message=prompt,
-            assistant_message=assistant_text,
-            trace=trace_collector.trace_events,
-            mode=mode,
-            forced_skill_id=forced_skill_id,
-            model=effective_model,
-            claude_session_id=claude_session_id,
-        )
-        yield {
-            "event": "done",
-            "data": {
-                "assistant_message": assistant_text,
-                "trace": trace_collector.trace_events,
-                "session": session,
-            },
-        }
+            session = self.store.append_turn(
+                workspace_id,
+                user_message=prompt,
+                assistant_message=assistant_text,
+                trace=trace_collector.trace_events,
+                mode=mode,
+                forced_skill_id=forced_skill_id,
+                model=effective_model,
+                claude_session_id=claude_session_id,
+            )
+            yield {
+                "event": "done",
+                "data": {
+                    "assistant_message": assistant_text,
+                    "trace": trace_collector.trace_events,
+                    "session": session,
+                },
+            }
 
     def _load_registry(self, workspace_id: str) -> UploadedSkillRegistry:
         self.store.ensure_native_skill_layout(workspace_id)
@@ -677,8 +720,10 @@ class SkillDebuggerService:
         mode_lines = [
             "You are operating inside a product skill debugger.",
             "Uploaded skills are exposed as native project Claude skills under .claude/skills.",
+            "The only Claude built-in tool available in this debugger is `Skill`.",
             "Do not ask the user to manually activate skills or load SKILL.md through a custom tool.",
             "Use Claude's native skill discovery flow to decide whether a project skill applies.",
+            "Prefer answering directly when possible.",
             "Google Maps and Yelp workspace tools are live in this debugger and do hit real backends when called.",
             "Any other workspace tools remain debug stubs: use realistic arguments, but they will not touch production backends.",
             "Tool reads, skill loads, and tool calls are recorded for debugging.",
@@ -939,7 +984,7 @@ class SkillDebuggerService:
                 parsed_output = _maybe_parse_json_text(text)
 
             trace_collector.record_local_tool_execution(
-                tool_name=f"mcp__skill_debugger__{tool_meta.name}",
+                tool_name=_sdk_workspace_tool_name(tool_meta.name),
                 tool_input=dict(args),
                 output=parsed_output,
                 status=status,

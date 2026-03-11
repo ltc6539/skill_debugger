@@ -56,6 +56,223 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function sanitizeUrl(url) {
+  const value = String(url || "").trim();
+  if (!value) return null;
+  const lowered = value.toLowerCase();
+  if (lowered.startsWith("javascript:") || lowered.startsWith("data:")) return null;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value)) return value;
+  if (value.startsWith("/") || value.startsWith("#") || value.startsWith("./") || value.startsWith("../")) {
+    return value;
+  }
+  return value;
+}
+
+function renderInlineMarkdown(text) {
+  const source = String(text || "");
+  const placeholders = [];
+  const stash = (html) => `@@MD${placeholders.push(html) - 1}@@`;
+
+  let value = source.replace(/`([^`\n]+)`/g, (_match, code) => {
+    return stash(`<code>${escapeHtml(code)}</code>`);
+  });
+
+  value = value.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (_match, label, url) => {
+    const safeUrl = sanitizeUrl(url);
+    if (!safeUrl) return escapeHtml(label);
+    return stash(`<a href="${escapeHtml(safeUrl)}" rel="noreferrer">${escapeHtml(label)}</a>`);
+  });
+
+  let html = escapeHtml(value);
+  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+  html = html.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+  html = html.replace(/(^|[^\*])\*([^*\n]+)\*(?=[^\*]|$)/g, "$1<em>$2</em>");
+  html = html.replace(/(^|[^_])_([^_\n]+)_(?=[^_]|$)/g, "$1<em>$2</em>");
+  html = html.replace(/@@MD(\d+)@@/g, (_match, index) => placeholders[Number(index)] || "");
+  return html;
+}
+
+function splitMarkdownTableRow(line) {
+  let value = String(line || "").trim();
+  if (value.startsWith("|")) value = value.slice(1);
+  if (value.endsWith("|")) value = value.slice(0, -1);
+  return value.split("|").map((cell) => cell.trim());
+}
+
+function isMarkdownTableSeparator(line) {
+  const cells = splitMarkdownTableRow(line);
+  if (!cells.length) return false;
+  return cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function tableAlignmentForCell(cell) {
+  const value = String(cell || "").trim();
+  if (value.startsWith(":") && value.endsWith(":")) return "center";
+  if (value.endsWith(":")) return "right";
+  return "left";
+}
+
+function renderMarkdown(text) {
+  const source = String(text || "").replace(/\r\n?/g, "\n");
+  if (!source.trim()) return "";
+
+  const lines = source.split("\n");
+  const html = [];
+  let paragraph = [];
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    const body = renderInlineMarkdown(paragraph.join("\n")).replace(/\n/g, "<br>");
+    html.push(`<p>${body}</p>`);
+    paragraph = [];
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+
+    if (!line.trim()) {
+      flushParagraph();
+      continue;
+    }
+
+    const fenceMatch = line.match(/^```([\w-]+)?\s*$/);
+    if (fenceMatch) {
+      flushParagraph();
+      const language = fenceMatch[1] ? ` class="language-${escapeHtml(fenceMatch[1])}"` : "";
+      const codeLines = [];
+      index += 1;
+      while (index < lines.length && !/^```/.test(lines[index])) {
+        codeLines.push(lines[index]);
+        index += 1;
+      }
+      html.push(`<pre><code${language}>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+      continue;
+    }
+
+    const headingMatch = line.match(/^(#{1,6})\s+(.*)$/);
+    if (headingMatch) {
+      flushParagraph();
+      const level = headingMatch[1].length;
+      html.push(`<h${level}>${renderInlineMarkdown(headingMatch[2].trim())}</h${level}>`);
+      continue;
+    }
+
+    if (
+      line.includes("|") &&
+      index + 1 < lines.length &&
+      lines[index + 1].includes("|") &&
+      isMarkdownTableSeparator(lines[index + 1])
+    ) {
+      flushParagraph();
+      const headers = splitMarkdownTableRow(line);
+      const separator = splitMarkdownTableRow(lines[index + 1]);
+      const alignments = headers.map((_, cellIndex) => tableAlignmentForCell(separator[cellIndex] || ""));
+      const rows = [];
+      index += 2;
+      while (index < lines.length) {
+        const rowLine = lines[index];
+        if (!rowLine.trim() || !rowLine.includes("|")) {
+          index -= 1;
+          break;
+        }
+        rows.push(splitMarkdownTableRow(rowLine));
+        index += 1;
+      }
+
+      const thead = `<thead><tr>${headers
+        .map(
+          (cell, cellIndex) =>
+            `<th style="text-align:${alignments[cellIndex] || "left"}">${renderInlineMarkdown(cell)}</th>`
+        )
+        .join("")}</tr></thead>`;
+      const tbody = rows.length
+        ? `<tbody>${rows
+            .map(
+              (row) =>
+                `<tr>${headers
+                  .map((_, cellIndex) => {
+                    const cell = row[cellIndex] || "";
+                    return `<td style="text-align:${alignments[cellIndex] || "left"}">${renderInlineMarkdown(cell)}</td>`;
+                  })
+                  .join("")}</tr>`
+            )
+            .join("")}</tbody>`
+        : "";
+      html.push(`<div class="markdown-table-wrap"><table>${thead}${tbody}</table></div>`);
+      continue;
+    }
+
+    if (/^ {0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line)) {
+      flushParagraph();
+      html.push("<hr>");
+      continue;
+    }
+
+    if (/^>\s?/.test(line)) {
+      flushParagraph();
+      const quoteLines = [line.replace(/^>\s?/, "")];
+      while (index + 1 < lines.length && /^>\s?/.test(lines[index + 1])) {
+        index += 1;
+        quoteLines.push(lines[index].replace(/^>\s?/, ""));
+      }
+      html.push(`<blockquote>${renderMarkdown(quoteLines.join("\n"))}</blockquote>`);
+      continue;
+    }
+
+    const unorderedMatch = line.match(/^[-*+]\s+(.*)$/);
+    const orderedMatch = line.match(/^\d+\.\s+(.*)$/);
+    if (unorderedMatch || orderedMatch) {
+      flushParagraph();
+      const ordered = Boolean(orderedMatch);
+      const tag = ordered ? "ol" : "ul";
+      const items = [];
+      let current = [ordered ? orderedMatch[1] : unorderedMatch[1]];
+
+      while (index + 1 < lines.length) {
+        const nextLine = lines[index + 1];
+        const nextOrdered = nextLine.match(/^\d+\.\s+(.*)$/);
+        const nextUnordered = nextLine.match(/^[-*+]\s+(.*)$/);
+        if ((ordered && nextOrdered) || (!ordered && nextUnordered)) {
+          items.push(current.join("\n"));
+          current = [ordered ? nextOrdered[1] : nextUnordered[1]];
+          index += 1;
+          continue;
+        }
+        if (/^\s{2,}\S/.test(nextLine)) {
+          current.push(nextLine.trim());
+          index += 1;
+          continue;
+        }
+        break;
+      }
+
+      items.push(current.join("\n"));
+      html.push(
+        `<${tag}>${items
+          .map((item) => `<li>${renderInlineMarkdown(item).replace(/\n/g, "<br>")}</li>`)
+          .join("")}</${tag}>`
+      );
+      continue;
+    }
+
+    paragraph.push(line);
+  }
+
+  flushParagraph();
+  return html.join("");
+}
+
+function setBubbleContent(bubble, text, { markdown = false } = {}) {
+  if (markdown) {
+    bubble.classList.add("markdown-body");
+    bubble.innerHTML = renderMarkdown(text || "");
+    return;
+  }
+  bubble.classList.remove("markdown-body");
+  bubble.textContent = text || "";
+}
+
 function formatJson(value) {
   if (value === null || value === undefined) return "";
   if (typeof value === "string") return value;
@@ -343,7 +560,7 @@ function createMessageNode(role, text, options = {}) {
 
   const bubble = document.createElement("div");
   bubble.className = `msg-bubble${options.streaming ? " streaming" : ""}`;
-  bubble.textContent = text || "";
+  setBubbleContent(bubble, text || "", { markdown: role === "assistant" });
   if (options.pendingAssistant) {
     bubble.dataset.pendingAssistant = "true";
   }
@@ -398,7 +615,9 @@ function updatePendingAssistantMessage() {
     renderChat();
     return;
   }
-  state.pendingAssistantBubble.textContent = state.pendingTurn.assistant_message || "";
+  setBubbleContent(state.pendingAssistantBubble, state.pendingTurn.assistant_message || "", {
+    markdown: true,
+  });
   els.chatLog.scrollTop = els.chatLog.scrollHeight;
 }
 
