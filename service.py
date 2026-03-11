@@ -16,8 +16,6 @@ from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
-import dataclasses
-
 from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server, tool
 from claude_agent_sdk._errors import (
     CLIConnectionError,
@@ -39,6 +37,7 @@ from skill_debugger.runtime import ClaudeSdkRuntime
 from skill_debugger.settings import SkillDebuggerSettings
 from skill_debugger.project_tool_catalog import get_project_tool_metas, get_project_tool_preset_names
 from skill_debugger.project_tool_runtime import ProjectToolRuntime
+from skill_debugger.reviewer import SkillReviewer
 from skill_debugger.skill_linter import SkillLintReport, lint_skill_package
 from skill_debugger.skill_registry import UploadedSkillRegistry, slugify
 from skill_debugger.store import WorkspaceStore
@@ -274,11 +273,13 @@ class SkillDebuggerService:
         settings: SkillDebuggerSettings,
         runtime: ClaudeSdkRuntime | None = None,
         project_tool_runtime: ProjectToolRuntime | None = None,
+        reviewer: SkillReviewer | None = None,
     ):
         self.store = store
         self.settings = settings
         self.runtime = runtime or ClaudeSdkRuntime()
         self.project_tool_runtime = project_tool_runtime or ProjectToolRuntime(settings)
+        self.reviewer = reviewer or SkillReviewer()
         self._workspace_write_locks: dict[str, asyncio.Lock] = {}
         self._workspace_write_locks_guard = Lock()
 
@@ -340,6 +341,7 @@ class SkillDebuggerService:
             "skills": registry.list_skill_dicts(),
             "tools": self._serialize_workspace_tools(registry, tool_registry),
             "unregistered_declared_tools": self._collect_unregistered_declared_tools(registry, tool_registry),
+            "reviews": self.store.list_reviews(workspace_id),
             "session": session,
             "runtime": self.runtime_status(),
         }
@@ -360,7 +362,50 @@ class SkillDebuggerService:
     async def clear_context(self, workspace_id: str) -> dict[str, Any]:
         async with self._workspace_write(workspace_id):
             self.store.clear_session(workspace_id)
+            self.store.clear_reviews(workspace_id)
             return self._get_workspace_state(workspace_id, persist_updates=True)
+
+    async def create_review(
+        self,
+        workspace_id: str,
+        *,
+        turn_id: str,
+        skill_id: str | None = None,
+        include_recent_turns: bool = True,
+    ) -> dict[str, Any]:
+        async with self._workspace_write(workspace_id):
+            workspace_state = self._get_workspace_state(workspace_id, persist_updates=True)
+            session = workspace_state["session"]
+            turns = list(session.get("turns") or [])
+            turn_index = next(
+                (index for index, item in enumerate(turns) if str(item.get("turn_id") or "") == turn_id),
+                None,
+            )
+            if turn_index is None:
+                raise KeyError(f"Turn not found: {turn_id}")
+
+            turn = turns[turn_index]
+            registry = self._load_registry(workspace_id)
+            resolved_skill_id = self._resolve_review_skill_id(
+                turn=turn,
+                registry=registry,
+                requested_skill_id=skill_id,
+            )
+            skill_meta = registry.get_skill_meta(resolved_skill_id)
+            if skill_meta is None:
+                raise KeyError(f"Skill not found: {resolved_skill_id}")
+
+            recent_turns = turns[max(0, turn_index - 2) : turn_index] if include_recent_turns else []
+            review = self.reviewer.review(
+                turn=turn,
+                recent_turns=recent_turns,
+                skill=skill_meta.to_dict(),
+                skill_document=self.store.read_skill_text(workspace_id, resolved_skill_id),
+                tools=list(workspace_state.get("tools") or []),
+                unregistered_declared_tools=list(workspace_state.get("unregistered_declared_tools") or []),
+            )
+            self.store.save_review(workspace_id, review)
+            return review
 
     async def upload_image(
         self,
@@ -558,33 +603,29 @@ class SkillDebuggerService:
                 visible_skill_ids=visible_skill_ids,
             )
             trace_collector = ToolTraceCollector()
-            tools = self._build_tools(workspace_id, tool_registry, stub_runtime, trace_collector)
-            mcp_servers = {"skill_debugger": create_sdk_mcp_server("skill-debugger", tools=tools)} if tools else {}
             effective_model = model or self.settings.default_model
+            resume_session_id = (
+                session.get("claude_session_id")
+                if self._can_resume_session(
+                    session,
+                    mode,
+                    forced_skill_id,
+                    effective_model,
+                    runtime_cwd,
+                )
+                else None
+            )
 
-            options = ClaudeAgentOptions(
-                tools=list(EXPLICIT_BUILTIN_TOOLS),
-                allowed_tools=[*EXPLICIT_BUILTIN_TOOLS, *[tool_def.name for tool_def in tools]],
-                mcp_servers=mcp_servers,
-                system_prompt=self._build_system_prompt(mode, visible_skill_ids),
-                cwd=str(runtime_project_dir),
-                model=effective_model,
-                max_turns=10,
-                include_partial_messages=True,
-                resume=(
-                    session.get("claude_session_id")
-                    if self._can_resume_session(
-                        session,
-                        mode,
-                        forced_skill_id,
-                        effective_model,
-                        runtime_cwd,
-                    )
-                    else None
-                ),
-                setting_sources=["project"],
-                env=self.settings.runtime_env(),
-                permission_mode="bypassPermissions",
+            current_options = self._build_runtime_options(
+                workspace_id=workspace_id,
+                tool_registry=tool_registry,
+                tool_runtime=stub_runtime,
+                trace_collector=trace_collector,
+                mode=mode,
+                visible_skill_ids=visible_skill_ids,
+                runtime_project_dir=runtime_project_dir,
+                effective_model=effective_model,
+                resume_session_id=resume_session_id,
             )
 
             streamed_text_parts: list[str] = []
@@ -603,13 +644,12 @@ class SkillDebuggerService:
                 },
             }
 
-            max_attempts = 2 if options.resume else 1
+            max_attempts = 2 if resume_session_id else 1
             succeeded = False
 
             for attempt in range(1, max_attempts + 1):
-                current_opts = options if attempt == 1 else dataclasses.replace(options, resume=None)
                 try:
-                    async for sdk_message in self.runtime.stream(effective_prompt, current_opts):
+                    async for sdk_message in self.runtime.stream(effective_prompt, current_options):
                         if isinstance(sdk_message, StreamEvent):
                             delta = _extract_text_delta(sdk_message.event)
                             if delta:
@@ -647,7 +687,19 @@ class SkillDebuggerService:
                         self.store.invalidate_runtime_session(workspace_id)
                         streamed_text_parts.clear()
                         final_text_parts.clear()
+                        result_text = None
                         trace_collector = ToolTraceCollector()
+                        current_options = self._build_runtime_options(
+                            workspace_id=workspace_id,
+                            tool_registry=tool_registry,
+                            tool_runtime=stub_runtime,
+                            trace_collector=trace_collector,
+                            mode=mode,
+                            visible_skill_ids=visible_skill_ids,
+                            runtime_project_dir=runtime_project_dir,
+                            effective_model=effective_model,
+                            resume_session_id=None,
+                        )
                         continue
 
                     yield {"event": "error", "data": {"message": user_msg}}
@@ -723,6 +775,49 @@ class SkillDebuggerService:
         registry = UploadedSkillRegistry(self.store.skills_dir(workspace_id))
         registry.load_all()
         return registry
+
+    @staticmethod
+    def _resolve_review_skill_id(
+        *,
+        turn: dict[str, Any],
+        registry: UploadedSkillRegistry,
+        requested_skill_id: str | None,
+    ) -> str:
+        if requested_skill_id:
+            normalized = slugify(requested_skill_id)
+            if not registry.has_skill(normalized):
+                raise KeyError(f"Skill not found: {requested_skill_id}")
+            return normalized
+
+        forced_skill_id = str(turn.get("forced_skill_id") or "").strip()
+        if str(turn.get("mode") or "").strip() == "forced" and forced_skill_id:
+            if registry.has_skill(forced_skill_id):
+                return forced_skill_id
+
+        activated_skills: list[str] = []
+        for entry in turn.get("trace") or []:
+            if entry.get("category") != "skill_activation":
+                continue
+            for raw in entry.get("skills") or []:
+                value = str(raw or "").strip()
+                if value and value not in activated_skills:
+                    activated_skills.append(value)
+            input_payload = entry.get("input") or {}
+            explicit = str(input_payload.get("skill") or input_payload.get("skill_id") or "").strip()
+            if explicit and explicit not in activated_skills:
+                activated_skills.append(explicit)
+
+        if len(activated_skills) == 1 and registry.has_skill(activated_skills[0]):
+            return activated_skills[0]
+        if len(registry.skills) == 1:
+            return registry.skills[0].skill_id
+        if activated_skills:
+            raise ValueError(
+                "Multiple activated skills found in this turn. Provide skill_id explicitly."
+            )
+        raise ValueError(
+            "Skill is ambiguous for this turn. Provide skill_id explicitly."
+        )
 
     def _load_tool_registry(
         self,
@@ -870,6 +965,36 @@ class SkillDebuggerService:
             )
             tool_defs.append(self._make_runtime_tool(workspace_id, tool_runtime, runtime_meta, trace_collector))
         return tool_defs
+
+    def _build_runtime_options(
+        self,
+        *,
+        workspace_id: str,
+        tool_registry: WorkspaceToolRegistry,
+        tool_runtime: StubToolRuntime,
+        trace_collector: ToolTraceCollector,
+        mode: DebuggerMode,
+        visible_skill_ids: list[str],
+        runtime_project_dir: Path,
+        effective_model: str | None,
+        resume_session_id: str | None,
+    ) -> ClaudeAgentOptions:
+        tools = self._build_tools(workspace_id, tool_registry, tool_runtime, trace_collector)
+        mcp_servers = {"skill_debugger": create_sdk_mcp_server("skill-debugger", tools=tools)} if tools else {}
+        return ClaudeAgentOptions(
+            tools=list(EXPLICIT_BUILTIN_TOOLS),
+            allowed_tools=[*EXPLICIT_BUILTIN_TOOLS, *[_sdk_workspace_tool_name(tool_def.name) for tool_def in tools]],
+            mcp_servers=mcp_servers,
+            system_prompt=self._build_system_prompt(mode, visible_skill_ids),
+            cwd=str(runtime_project_dir),
+            model=effective_model,
+            max_turns=10,
+            include_partial_messages=True,
+            resume=resume_session_id,
+            setting_sources=["project"],
+            env=self.settings.runtime_env(),
+            permission_mode="bypassPermissions",
+        )
 
     def _prepare_runtime_project(
         self,

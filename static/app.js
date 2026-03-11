@@ -13,6 +13,11 @@ const state = {
   busy: false,
   pendingAssistantBubble: null,
   editingSkillId: null,
+  reviewPanelMode: "trace",
+  selectedReviewId: null,
+  reviewBusyTurnId: null,
+  pendingReviewTurnId: null,
+  reviewPickerTurnId: null,
 };
 
 const ACTIVE_WORKSPACE_STORAGE_KEY = "skill_debugger.activeWorkspaceId";
@@ -36,6 +41,9 @@ const els = {
   attachImageButton: document.getElementById("attachImageButton"),
   chatInput: document.getElementById("chatInput"),
   traceLog: document.getElementById("traceLog"),
+  traceTabButton: document.getElementById("traceTabButton"),
+  reviewTabButton: document.getElementById("reviewTabButton"),
+  reviewPanel: document.getElementById("reviewPanel"),
   forcedSkillSelect: document.getElementById("forcedSkillSelect"),
   toolForm: document.getElementById("toolForm"),
   toolNameInput: document.getElementById("toolNameInput"),
@@ -49,6 +57,11 @@ const els = {
   closeSkillEditorButton: document.getElementById("closeSkillEditorButton"),
   cancelSkillEditorButton: document.getElementById("cancelSkillEditorButton"),
   saveSkillEditorButton: document.getElementById("saveSkillEditorButton"),
+  reviewPickerModal: document.getElementById("reviewPickerModal"),
+  reviewSkillSelect: document.getElementById("reviewSkillSelect"),
+  closeReviewPickerButton: document.getElementById("closeReviewPickerButton"),
+  cancelReviewPickerButton: document.getElementById("cancelReviewPickerButton"),
+  confirmReviewPickerButton: document.getElementById("confirmReviewPickerButton"),
 };
 
 /* ---- helpers ---- */
@@ -318,6 +331,49 @@ function truncate(str, len) {
   return str.length > len ? str.slice(0, len) + "..." : str;
 }
 
+function getReviews() {
+  return state.current?.reviews || [];
+}
+
+function getReviewById(reviewId) {
+  return getReviews().find((item) => item.review_id === reviewId) || null;
+}
+
+function getLatestReviewForTurn(turnId) {
+  return getReviews().find((item) => item.turn_id === turnId) || null;
+}
+
+function getSelectedReview() {
+  if (state.selectedReviewId) {
+    const selected = getReviewById(state.selectedReviewId);
+    if (selected) return selected;
+  }
+  return null;
+}
+
+function ensureSelectedReview() {
+  const selected = getSelectedReview();
+  if (selected) return selected;
+  const reviews = getReviews();
+  if (!reviews.length) {
+    state.selectedReviewId = null;
+    return null;
+  }
+  state.selectedReviewId = reviews[0].review_id;
+  return reviews[0];
+}
+
+function switchSidePanel(mode) {
+  state.reviewPanelMode = mode === "review" ? "review" : "trace";
+  const traceActive = state.reviewPanelMode === "trace";
+  els.traceTabButton.classList.toggle("active", traceActive);
+  els.reviewTabButton.classList.toggle("active", !traceActive);
+  els.traceTabButton.setAttribute("aria-selected", traceActive ? "true" : "false");
+  els.reviewTabButton.setAttribute("aria-selected", traceActive ? "false" : "true");
+  els.traceLog.classList.toggle("hidden", !traceActive);
+  els.reviewPanel.classList.toggle("hidden", traceActive);
+}
+
 function formatFileSize(bytes) {
   const value = Number(bytes || 0);
   if (!Number.isFinite(value) || value <= 0) return "";
@@ -446,6 +502,8 @@ function setBusy(nextBusy) {
   if (els.addToolButton) els.addToolButton.disabled = nextBusy;
   if (els.saveSkillEditorButton) els.saveSkillEditorButton.disabled = nextBusy;
   if (els.skillEditorInput) els.skillEditorInput.disabled = nextBusy;
+  if (els.confirmReviewPickerButton) els.confirmReviewPickerButton.disabled = nextBusy;
+  if (els.reviewSkillSelect) els.reviewSkillSelect.disabled = nextBusy;
   document.getElementById("sendButton").disabled = nextBusy;
 }
 
@@ -625,6 +683,7 @@ function renderHeader() {
     0
   );
   els.turnCount.textContent = `${traceCount}`;
+  els.reviewTabButton.textContent = `Review${getReviews().length ? ` · ${getReviews().length}` : ""}`;
 
   const runtime = state.current?.runtime || state.runtime || {};
   if (runtime.default_model) {
@@ -707,6 +766,37 @@ function renderChat() {
       streaming: isStreaming,
       pendingAssistant: isStreaming,
     });
+    if (!isStreaming && turn.turn_id) {
+      const actions = document.createElement("div");
+      actions.className = "turn-actions";
+
+      const reviewButton = document.createElement("button");
+      reviewButton.type = "button";
+      reviewButton.className = "turn-action-btn";
+      const latestReview = getLatestReviewForTurn(turn.turn_id);
+      const busy = state.reviewBusyTurnId === turn.turn_id;
+      reviewButton.textContent = busy ? "分析中..." : latestReview ? "重新分析本轮" : "分析本轮";
+      reviewButton.disabled = busy || state.busy;
+      reviewButton.addEventListener("click", () => {
+        requestTurnReview(turn);
+      });
+      actions.appendChild(reviewButton);
+
+      if (latestReview) {
+        const viewButton = document.createElement("button");
+        viewButton.type = "button";
+        viewButton.className = "turn-action-btn subtle";
+        viewButton.textContent = "查看 Review";
+        viewButton.addEventListener("click", () => {
+          state.selectedReviewId = latestReview.review_id;
+          switchSidePanel("review");
+          renderReviewPanel();
+        });
+        actions.appendChild(viewButton);
+      }
+
+      assistantNode.wrapper.appendChild(actions);
+    }
     els.chatLog.appendChild(assistantNode.wrapper);
 
     if (isStreaming) {
@@ -792,6 +882,162 @@ function renderTrace() {
   });
 }
 
+function renderReviewPanel() {
+  const selected = ensureSelectedReview();
+  els.reviewPanel.innerHTML = "";
+
+  if (state.pendingReviewTurnId && !selected) {
+    els.reviewPanel.innerHTML = '<div class="review-empty">正在分析这轮 skill 表现...</div>';
+    return;
+  }
+
+  if (!selected) {
+    els.reviewPanel.innerHTML =
+      '<div class="review-empty">点击任意 turn 下方的“分析本轮”，这里会展示结构化 reviewer 输出。</div>';
+    return;
+  }
+
+  const scoreEntries = Object.entries(selected.scores || {});
+  const evidence = selected.evidence || {};
+  const findings = selected.findings || [];
+  const suggestedEdits = selected.suggested_edits || [];
+  const suggestedTests = selected.suggested_tests || [];
+  const verdictClass = String(selected.verdict || "partial");
+
+  const panel = document.createElement("div");
+  panel.className = "review-stack";
+  panel.innerHTML = `
+    <section class="review-card">
+      <div class="review-head">
+        <div>
+          <div class="review-kicker">Turn Review</div>
+          <h3 class="review-title">${escapeHtml(selected.skill_id || "unknown skill")}</h3>
+        </div>
+        <span class="review-verdict ${escapeHtml(verdictClass)}">${escapeHtml(selected.verdict || "partial")}</span>
+      </div>
+      <p class="review-summary">${escapeHtml(selected.summary || "")}</p>
+      <div class="review-flags">
+        <span class="review-flag ${selected.should_trigger ? "positive" : "neutral"}">should trigger: ${selected.should_trigger ? "yes" : "no"}</span>
+        <span class="review-flag ${selected.did_trigger ? "positive" : "neutral"}">did trigger: ${selected.did_trigger ? "yes" : "no"}</span>
+      </div>
+    </section>
+  `;
+
+  const scoreCard = document.createElement("section");
+  scoreCard.className = "review-card";
+  scoreCard.innerHTML = `
+    <div class="review-section-title">Scores</div>
+    <div class="review-score-grid">
+      ${scoreEntries
+        .map(
+          ([key, value]) => `
+            <div class="review-score-item">
+              <div class="review-score-label">${escapeHtml(key.replaceAll("_", " "))}</div>
+              <div class="review-score-value">${escapeHtml(String(value))}/5</div>
+            </div>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+  panel.appendChild(scoreCard);
+
+  const evidenceCard = document.createElement("section");
+  evidenceCard.className = "review-card";
+  evidenceCard.innerHTML = `
+    <div class="review-section-title">Evidence</div>
+    <div class="review-subsection">
+      <div class="review-subtitle">Query Signals</div>
+      <ul class="review-list">${(evidence.query_signals || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("") || "<li>无</li>"}</ul>
+    </div>
+    <div class="review-subsection">
+      <div class="review-subtitle">Skill Signals</div>
+      <ul class="review-list">${(evidence.skill_signals || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("") || "<li>无</li>"}</ul>
+    </div>
+    <div class="review-subsection">
+      <div class="review-subtitle">Trace Signals</div>
+      <ul class="review-list">${(evidence.trace_signals || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("") || "<li>无</li>"}</ul>
+    </div>
+  `;
+  panel.appendChild(evidenceCard);
+
+  const findingsCard = document.createElement("section");
+  findingsCard.className = "review-card";
+  findingsCard.innerHTML = `
+    <div class="review-section-title">Findings</div>
+    <div class="review-finding-list">
+      ${
+        findings.length
+          ? findings
+              .map(
+                (item) => `
+                  <article class="review-finding ${escapeHtml(item.severity || "medium")}">
+                    <div class="review-finding-head">
+                      <span class="review-finding-type">${escapeHtml(item.type || "finding")}</span>
+                      <span class="review-finding-severity">${escapeHtml(item.severity || "medium")}</span>
+                    </div>
+                    <div class="review-finding-message">${escapeHtml(item.message || "")}</div>
+                    <div class="review-finding-evidence">${escapeHtml(item.evidence || "")}</div>
+                  </article>
+                `
+              )
+              .join("")
+          : '<div class="review-empty-inline">没有明显问题。</div>'
+      }
+    </div>
+  `;
+  panel.appendChild(findingsCard);
+
+  const editsCard = document.createElement("section");
+  editsCard.className = "review-card";
+  editsCard.innerHTML = `
+    <div class="review-section-title">Suggested Edits</div>
+    <div class="review-edit-list">
+      ${
+        suggestedEdits.length
+          ? suggestedEdits
+              .map(
+                (item) => `
+                  <article class="review-edit">
+                    <div class="review-edit-location">${escapeHtml(item.location || "")}</div>
+                    <div class="review-edit-proposal">${escapeHtml(item.proposal || "")}</div>
+                    <div class="review-edit-reason">${escapeHtml(item.reason || "")}</div>
+                  </article>
+                `
+              )
+              .join("")
+          : '<div class="review-empty-inline">暂无建议。</div>'
+      }
+    </div>
+  `;
+  panel.appendChild(editsCard);
+
+  const testsCard = document.createElement("section");
+  testsCard.className = "review-card";
+  testsCard.innerHTML = `
+    <div class="review-section-title">Suggested Tests</div>
+    <div class="review-test-list">
+      ${
+        suggestedTests.length
+          ? suggestedTests
+              .map(
+                (item) => `
+                  <article class="review-test">
+                    <div class="review-test-query">${escapeHtml(item.query || "")}</div>
+                    <div class="review-test-expected">${escapeHtml(item.expected || "")}</div>
+                  </article>
+                `
+              )
+              .join("")
+          : '<div class="review-empty-inline">暂无测试建议。</div>'
+      }
+    </div>
+  `;
+  panel.appendChild(testsCard);
+
+  els.reviewPanel.appendChild(panel);
+}
+
 /* ---- render all ---- */
 
 function renderAll() {
@@ -802,6 +1048,8 @@ function renderAll() {
   renderComposerAttachments();
   renderChat();
   renderTrace();
+  renderReviewPanel();
+  switchSidePanel(state.reviewPanelMode);
 }
 
 /* ---- API helpers ---- */
@@ -809,8 +1057,16 @@ function renderAll() {
 async function fetchJson(url, options) {
   const response = await fetch(url, options);
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `Request failed: ${response.status}`);
+    const raw = await response.text();
+    try {
+      const payload = JSON.parse(raw);
+      throw new Error(payload.detail || raw || `Request failed: ${response.status}`);
+    } catch (_error) {
+      if (_error instanceof Error && _error.message !== raw) {
+        throw _error;
+      }
+      throw new Error(raw || `Request failed: ${response.status}`);
+    }
   }
   return response.json();
 }
@@ -821,6 +1077,82 @@ async function confirmDeletion({ title, message, confirmLabel }) {
     return helper({ title, message, confirmLabel });
   }
   return window.confirm(message);
+}
+
+function resolveReviewSkill(turn) {
+  const skills = state.current?.skills || [];
+  if (!turn) return { skillId: null, needsPicker: false };
+
+  if (turn.mode === "forced" && turn.forced_skill_id) {
+    return { skillId: turn.forced_skill_id, needsPicker: false };
+  }
+
+  const activated = [];
+  (turn.trace || []).forEach((entry) => {
+    if (entry.category !== "skill_activation") return;
+    (entry.skills || []).forEach((skillId) => {
+      if (skillId && !activated.includes(skillId)) activated.push(skillId);
+    });
+    const explicit = entry.input?.skill || entry.input?.skill_id;
+    if (explicit && !activated.includes(explicit)) activated.push(explicit);
+  });
+  if (activated.length === 1) {
+    return { skillId: activated[0], needsPicker: false };
+  }
+
+  if (skills.length === 1) {
+    return { skillId: skills[0].skill_id, needsPicker: false };
+  }
+
+  return { skillId: null, needsPicker: true };
+}
+
+function upsertReview(review) {
+  if (!state.current) return;
+  const existing = getReviews().filter((item) => item.review_id !== review.review_id);
+  state.current.reviews = [review, ...existing].sort((left, right) =>
+    String(right.created_at || "").localeCompare(String(left.created_at || ""))
+  );
+  state.selectedReviewId = review.review_id;
+}
+
+async function runTurnReview(turnId, skillId = null) {
+  if (!state.activeWorkspaceId || state.busy || state.reviewBusyTurnId) return;
+  state.reviewBusyTurnId = turnId;
+  state.pendingReviewTurnId = turnId;
+  switchSidePanel("review");
+  renderChat();
+  renderReviewPanel();
+  try {
+    const review = await fetchJson(`/api/workspaces/${state.activeWorkspaceId}/reviews`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        turn_id: turnId,
+        skill_id: skillId,
+        include_recent_turns: true,
+      }),
+    });
+    upsertReview(review);
+  } finally {
+    state.reviewBusyTurnId = null;
+    state.pendingReviewTurnId = null;
+    renderChat();
+    renderReviewPanel();
+  }
+}
+
+function requestTurnReview(turn) {
+  const resolved = resolveReviewSkill(turn);
+  if (resolved.skillId) {
+    runTurnReview(turn.turn_id, resolved.skillId).catch((error) => window.alert(error.message));
+    return;
+  }
+  if (resolved.needsPicker) {
+    openReviewPickerModal(state.current?.skills || [], turn.turn_id);
+    return;
+  }
+  window.alert("当前 turn 无法自动确定要分析的 skill。");
 }
 
 function openSkillEditorModal() {
@@ -836,6 +1168,26 @@ function closeSkillEditorModal() {
   els.skillEditorModal.setAttribute("aria-hidden", "true");
 }
 
+function openReviewPickerModal(skillOptions, turnId) {
+  state.reviewPickerTurnId = turnId;
+  els.reviewSkillSelect.innerHTML = "";
+  skillOptions.forEach((skill) => {
+    const option = document.createElement("option");
+    option.value = skill.skill_id;
+    option.textContent = `${skill.skill_id} ${skill.description ? `· ${truncate(skill.description, 48)}` : ""}`;
+    els.reviewSkillSelect.appendChild(option);
+  });
+  els.reviewPickerModal.classList.remove("hidden");
+  els.reviewPickerModal.setAttribute("aria-hidden", "false");
+}
+
+function closeReviewPickerModal() {
+  state.reviewPickerTurnId = null;
+  els.reviewSkillSelect.innerHTML = "";
+  els.reviewPickerModal.classList.add("hidden");
+  els.reviewPickerModal.setAttribute("aria-hidden", "true");
+}
+
 /* ---- actions ---- */
 
 async function bootstrap() {
@@ -848,6 +1200,7 @@ async function bootstrap() {
     preferredWorkspaceId && preferredWorkspaceId !== payload.current_workspace_id
       ? await fetchJson(`/api/workspaces/${preferredWorkspaceId}`)
       : payload.current;
+  state.selectedReviewId = (state.current?.reviews || [])[0]?.review_id || null;
   writeStoredWorkspaceId(state.activeWorkspaceId);
   renderAll();
 }
@@ -858,6 +1211,7 @@ async function loadWorkspace(workspaceId) {
   resetStreamingDomRefs();
   state.current = await fetchJson(`/api/workspaces/${workspaceId}`);
   state.activeWorkspaceId = workspaceId;
+  state.selectedReviewId = (state.current?.reviews || [])[0]?.review_id || null;
   writeStoredWorkspaceId(workspaceId);
   renderAll();
 }
@@ -873,6 +1227,7 @@ async function createWorkspace() {
   });
   state.activeWorkspaceId = payload.workspace.workspace_id;
   state.current = payload;
+  state.selectedReviewId = (state.current?.reviews || [])[0]?.review_id || null;
   state.pendingImages = [];
   state.workspaces = await fetchJson("/api/workspaces").then((data) => data.workspaces || []);
   writeStoredWorkspaceId(state.activeWorkspaceId);
@@ -897,6 +1252,7 @@ async function deleteCurrentWorkspace() {
   state.runtime = payload.runtime || {};
   state.activeWorkspaceId = payload.current_workspace_id;
   state.current = payload.current;
+  state.selectedReviewId = (state.current?.reviews || [])[0]?.review_id || null;
   state.pendingTurn = null;
   state.pendingImages = [];
   resetStreamingDomRefs();
@@ -921,6 +1277,7 @@ async function uploadSkills(fileList) {
       `/api/workspaces/${state.activeWorkspaceId}/skills/upload`,
       { method: "POST", body: formData }
     );
+    state.selectedReviewId = (state.current?.reviews || [])[0]?.review_id || null;
     state.workspaces = await fetchJson("/api/workspaces").then((data) => data.workspaces || []);
     els.skillFiles.value = "";
     els.skillFolderFiles.value = "";
@@ -976,6 +1333,7 @@ async function deleteSkill(skillId) {
     `/api/workspaces/${state.activeWorkspaceId}/skills/${encodeURIComponent(skillId)}`,
     { method: "DELETE" }
   );
+  state.selectedReviewId = (state.current?.reviews || [])[0]?.review_id || null;
   renderAll();
 }
 
@@ -1008,6 +1366,7 @@ async function saveSkillEditor() {
       }
     );
     state.current = payload.current;
+    state.selectedReviewId = (state.current?.reviews || [])[0]?.review_id || null;
     closeSkillEditorModal();
     renderAll();
     if (currentMode() === "forced" && currentForced === previousSkillId) {
@@ -1034,6 +1393,7 @@ async function addTool(event) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
     });
+    state.selectedReviewId = (state.current?.reviews || [])[0]?.review_id || null;
     els.toolNameInput.value = "";
     renderAll();
   } finally {
@@ -1052,6 +1412,7 @@ async function deleteTool(toolName) {
       `/api/workspaces/${state.activeWorkspaceId}/tools/${encodeURIComponent(toolName)}`,
       { method: "DELETE" }
     );
+    state.selectedReviewId = (state.current?.reviews || [])[0]?.review_id || null;
     renderAll();
   } finally {
     setBusy(false);
@@ -1067,6 +1428,7 @@ async function clearContext() {
     `/api/workspaces/${state.activeWorkspaceId}/context/clear`,
     { method: "POST" }
   );
+  state.selectedReviewId = null;
   renderAll();
 }
 
@@ -1314,6 +1676,13 @@ if (els.toolForm) {
     addTool(event).catch((error) => window.alert(error.message));
   });
 }
+els.traceTabButton.addEventListener("click", () => {
+  switchSidePanel("trace");
+});
+els.reviewTabButton.addEventListener("click", () => {
+  switchSidePanel("review");
+  renderReviewPanel();
+});
 els.closeSkillEditorButton.addEventListener("click", closeSkillEditorModal);
 els.cancelSkillEditorButton.addEventListener("click", closeSkillEditorModal);
 els.saveSkillEditorButton.addEventListener("click", () => {
@@ -1322,6 +1691,16 @@ els.saveSkillEditorButton.addEventListener("click", () => {
   });
 });
 els.skillEditorModal.querySelector(".editor-backdrop").addEventListener("click", closeSkillEditorModal);
+els.closeReviewPickerButton.addEventListener("click", closeReviewPickerModal);
+els.cancelReviewPickerButton.addEventListener("click", closeReviewPickerModal);
+els.confirmReviewPickerButton.addEventListener("click", () => {
+  const turnId = state.reviewPickerTurnId;
+  const skillId = els.reviewSkillSelect.value;
+  closeReviewPickerModal();
+  if (!turnId || !skillId) return;
+  runTurnReview(turnId, skillId).catch((error) => window.alert(error.message));
+});
+els.reviewPickerModal.querySelector(".editor-backdrop").addEventListener("click", closeReviewPickerModal);
 
 els.chatForm.addEventListener("submit", (event) => {
   sendChat(event).catch((error) => {
@@ -1342,6 +1721,9 @@ els.chatForm.addEventListener("submit", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !els.skillEditorModal.classList.contains("hidden")) {
     closeSkillEditorModal();
+  }
+  if (event.key === "Escape" && !els.reviewPickerModal.classList.contains("hidden")) {
+    closeReviewPickerModal();
   }
 });
 

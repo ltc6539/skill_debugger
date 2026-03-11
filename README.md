@@ -40,11 +40,29 @@ This is intentional for early product debugging: the platform helps validate tri
 
 ## Run
 
+Claude Agent SDK requires `Python 3.10+`. If your system `python3` is still 3.9, create a local venv with a newer interpreter first:
+
+```bash
+uv venv --python /opt/homebrew/bin/python3.12 .venv
+./.venv/bin/python -m ensurepip --upgrade
+./.venv/bin/python -m pip install -r requirements.txt
+```
+
+Then run the app from the repo root:
+
 ```bash
 uvicorn skill_debugger.app:app --reload --port 8011
 ```
 
 Open `http://127.0.0.1:8011`.
+
+## Tests
+
+From `skill_debugger/`:
+
+```bash
+./.venv/bin/python -m unittest -q
+```
 
 ## OpenRouter
 

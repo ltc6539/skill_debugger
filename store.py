@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
 import re
 import shutil
@@ -10,6 +11,8 @@ from threading import RLock
 from uuid import uuid4
 
 from skill_debugger.skill_registry import slugify
+
+logger = logging.getLogger(__name__)
 
 
 def utcnow_iso() -> str:
@@ -31,12 +34,16 @@ class WorkspaceStore:
     def list_workspaces(self) -> list[dict]:
         items: list[dict] = []
         for path in sorted(self.base_dir.glob("*/workspace.json")):
-            items.append(json.loads(path.read_text(encoding="utf-8")))
+            try:
+                items.append(json.loads(path.read_text(encoding="utf-8")))
+            except json.JSONDecodeError:
+                logger.warning("Skipping unreadable workspace metadata: %s", path)
         return items
 
     def create_workspace(self, name: str | None = None) -> dict:
         with self._lock:
-            requested = slugify(name or f"workspace-{uuid4().hex[:8]}")
+            normalized_name = str(name or "").strip()
+            requested = slugify(normalized_name or f"workspace-{uuid4().hex[:8]}")
             workspace_id = requested
             suffix = 2
             while self.workspace_dir(workspace_id).exists():
@@ -45,7 +52,7 @@ class WorkspaceStore:
             now = utcnow_iso()
             workspace = {
                 "workspace_id": workspace_id,
-                "name": (name or workspace_id).strip(),
+                "name": normalized_name or workspace_id,
                 "created_at": now,
                 "updated_at": now,
             }
@@ -53,6 +60,7 @@ class WorkspaceStore:
             self.claude_dir(workspace_id).mkdir(parents=True, exist_ok=True)
             self.skills_dir(workspace_id).mkdir(parents=True, exist_ok=True)
             self.runtime_projects_dir(workspace_id).mkdir(parents=True, exist_ok=True)
+            self.reviews_dir(workspace_id).mkdir(parents=True, exist_ok=True)
             self._write_json(self.workspace_dir(workspace_id) / "workspace.json", workspace)
             self._write_json(self.workspace_dir(workspace_id) / "session.json", self._empty_session())
             self._write_json(self.tools_path(workspace_id), self._empty_tools())
@@ -88,6 +96,9 @@ class WorkspaceStore:
 
     def tools_path(self, workspace_id: str) -> Path:
         return self.workspace_dir(workspace_id) / "tools.json"
+
+    def reviews_dir(self, workspace_id: str) -> Path:
+        return self.workspace_dir(workspace_id) / "reviews"
 
     def images_dir(self, workspace_id: str) -> Path:
         return self.workspace_dir(workspace_id) / "images"
@@ -129,6 +140,15 @@ class WorkspaceStore:
     def clear_session(self, workspace_id: str) -> dict:
         session = self._empty_session()
         return self.save_session(workspace_id, session)
+
+    def clear_reviews(self, workspace_id: str) -> None:
+        with self._lock:
+            self.get_workspace(workspace_id)
+            reviews_dir = self.reviews_dir(workspace_id)
+            if reviews_dir.exists():
+                shutil.rmtree(reviews_dir)
+            reviews_dir.mkdir(parents=True, exist_ok=True)
+            self.touch_workspace(workspace_id)
 
     def invalidate_runtime_session(self, workspace_id: str) -> dict:
         with self._lock:
@@ -252,34 +272,48 @@ class WorkspaceStore:
         return files
 
     def write_skill_package(self, workspace_id: str, skill_dir_name: str, files: dict[str, bytes]) -> Path:
-        self.get_workspace(workspace_id)
-        self.ensure_native_skill_layout(workspace_id)
-        target_dir = self.skill_dir(workspace_id, skill_dir_name)
-        if target_dir.exists():
-            shutil.rmtree(target_dir)
-        target_dir.mkdir(parents=True, exist_ok=True)
-        for rel_path, raw in files.items():
-            normalized = str(rel_path).replace("\\", "/").strip("/")
-            parts = [part for part in normalized.split("/") if part and part != "."]
-            if not parts or any(part == ".." for part in parts):
-                raise ValueError(f"Invalid skill package path: {rel_path}")
-            target_path = target_dir.joinpath(*parts)
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_bytes(raw)
-        self.touch_workspace(workspace_id)
-        return target_dir
+        with self._lock:
+            self.get_workspace(workspace_id)
+            self.ensure_native_skill_layout(workspace_id)
+            target_dir = self.skill_dir(workspace_id, skill_dir_name)
+            parent_dir = target_dir.parent
+            staging_dir = parent_dir / f".{skill_dir_name}.tmp-{uuid4().hex}"
+            backup_dir = parent_dir / f".{skill_dir_name}.bak-{uuid4().hex}"
+
+            self._cleanup_path(staging_dir)
+            self._cleanup_path(backup_dir)
+
+            try:
+                staging_dir.mkdir(parents=True, exist_ok=True)
+                self._write_skill_tree(staging_dir, files)
+                had_existing = target_dir.exists()
+                if had_existing:
+                    target_dir.rename(backup_dir)
+                staging_dir.rename(target_dir)
+                if backup_dir.exists():
+                    shutil.rmtree(backup_dir)
+                self.touch_workspace(workspace_id)
+                return target_dir
+            except Exception:
+                if backup_dir.exists() and not target_dir.exists():
+                    backup_dir.rename(target_dir)
+                raise
+            finally:
+                self._cleanup_path(staging_dir)
+                self._cleanup_path(backup_dir)
 
     def delete_skill(self, workspace_id: str, skill_dir_name: str) -> None:
-        self.get_workspace(workspace_id)
-        self.ensure_native_skill_layout(workspace_id)
-        target_dir = self.skill_dir(workspace_id, skill_dir_name)
-        if not target_dir.exists():
-            raise KeyError(f"Skill not found: {skill_dir_name}")
-        shutil.rmtree(target_dir)
-        legacy_dir = self.legacy_skills_dir(workspace_id) / skill_dir_name
-        if legacy_dir.exists():
-            shutil.rmtree(legacy_dir)
-        self.touch_workspace(workspace_id)
+        with self._lock:
+            self.get_workspace(workspace_id)
+            self.ensure_native_skill_layout(workspace_id)
+            target_dir = self.skill_dir(workspace_id, skill_dir_name)
+            if not target_dir.exists():
+                raise KeyError(f"Skill not found: {skill_dir_name}")
+            shutil.rmtree(target_dir)
+            legacy_dir = self.legacy_skills_dir(workspace_id) / skill_dir_name
+            if legacy_dir.exists():
+                shutil.rmtree(legacy_dir)
+            self.touch_workspace(workspace_id)
 
     def ensure_native_skill_layout(self, workspace_id: str) -> None:
         self.get_workspace(workspace_id)
@@ -309,6 +343,31 @@ class WorkspaceStore:
             self._write_json(path, payload)
             return payload
         return json.loads(path.read_text(encoding="utf-8"))
+
+    def list_reviews(self, workspace_id: str) -> list[dict]:
+        self.get_workspace(workspace_id)
+        reviews_dir = self.reviews_dir(workspace_id)
+        reviews_dir.mkdir(parents=True, exist_ok=True)
+        items: list[dict] = []
+        for path in sorted(reviews_dir.glob("*.json")):
+            try:
+                items.append(json.loads(path.read_text(encoding="utf-8")))
+            except json.JSONDecodeError:
+                continue
+        items.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+        return items
+
+    def save_review(self, workspace_id: str, payload: dict) -> dict:
+        with self._lock:
+            self.get_workspace(workspace_id)
+            review_id = str(payload.get("review_id") or "").strip()
+            if not review_id:
+                raise ValueError("Review payload must include review_id.")
+            reviews_dir = self.reviews_dir(workspace_id)
+            reviews_dir.mkdir(parents=True, exist_ok=True)
+            self._write_json(reviews_dir / f"{review_id}.json", payload)
+            self.touch_workspace(workspace_id)
+            return payload
 
     def save_tool_registry(self, workspace_id: str, payload: dict) -> dict:
         with self._lock:
@@ -347,4 +406,31 @@ class WorkspaceStore:
 
     @staticmethod
     def _write_json(path: Path, payload: dict) -> None:
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_name(f".{path.name}.tmp-{uuid4().hex}")
+        try:
+            temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            temp_path.replace(path)
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
+
+    @staticmethod
+    def _write_skill_tree(target_dir: Path, files: dict[str, bytes]) -> None:
+        for rel_path, raw in files.items():
+            normalized = str(rel_path).replace("\\", "/").strip("/")
+            parts = [part for part in normalized.split("/") if part and part != "."]
+            if not parts or any(part == ".." for part in parts):
+                raise ValueError(f"Invalid skill package path: {rel_path}")
+            target_path = target_dir.joinpath(*parts)
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_bytes(raw)
+
+    @staticmethod
+    def _cleanup_path(path: Path) -> None:
+        if not path.exists():
+            return
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+            return
+        path.unlink(missing_ok=True)

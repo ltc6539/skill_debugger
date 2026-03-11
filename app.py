@@ -61,6 +61,12 @@ class SyncProjectToolsRequest(BaseModel):
     presets: list[str] | None = None
 
 
+class CreateReviewRequest(BaseModel):
+    turn_id: str
+    skill_id: str | None = None
+    include_recent_turns: bool = True
+
+
 @app.get("/")
 async def index() -> FileResponse:
     return FileResponse(BASE_DIR / "static" / "index.html")
@@ -234,6 +240,21 @@ async def clear_context(workspace_id: str) -> dict:
         return await service.clear_context(workspace_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/workspaces/{workspace_id}/reviews")
+async def create_review(workspace_id: str, payload: CreateReviewRequest) -> dict:
+    try:
+        return await service.create_review(
+            workspace_id,
+            turn_id=payload.turn_id,
+            skill_id=payload.skill_id,
+            include_recent_turns=payload.include_recent_turns,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/workspaces/{workspace_id}/chat/stream")

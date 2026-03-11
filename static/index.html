@@ -122,10 +122,13 @@
         <!-- RIGHT: TRACE -->
         <aside class="trace-aside">
           <div class="trace-header">
-            <span class="section-label">工具调用轨迹</span>
-            <span id="turnCount" class="badge">0</span>
+            <div class="trace-tabs" role="tablist" aria-label="调试侧栏">
+              <button id="traceTabButton" class="trace-tab active" type="button" role="tab" aria-selected="true">轨迹 <span id="turnCount" class="badge">0</span></button>
+              <button id="reviewTabButton" class="trace-tab" type="button" role="tab" aria-selected="false">Review</button>
+            </div>
           </div>
           <div id="traceLog" class="trace-log"></div>
+          <div id="reviewPanel" class="review-panel hidden"></div>
         </aside>
       </div>
     </div>
@@ -150,6 +153,30 @@
         <div class="editor-actions">
           <button id="cancelSkillEditorButton" class="sidebar-btn" type="button">取消</button>
           <button id="saveSkillEditorButton" class="sidebar-btn link-btn" type="button">保存 Skill</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="reviewPickerModal" class="editor-modal hidden" aria-hidden="true">
+      <div class="editor-backdrop"></div>
+      <section class="picker-panel" role="dialog" aria-modal="true" aria-labelledby="reviewPickerTitle">
+        <div class="editor-header">
+          <div class="editor-header-copy">
+            <div id="reviewPickerTitle" class="editor-title">选择要分析的 Skill</div>
+            <div class="editor-meta">当前 turn 无法自动唯一确定 skill。</div>
+          </div>
+          <button id="closeReviewPickerButton" class="icon-btn" type="button" title="关闭选择器">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+        <div class="editor-note">优先选这轮最可能应该生效的 skill。</div>
+        <select id="reviewSkillSelect" class="picker-select" aria-label="选择 review skill"></select>
+        <div class="editor-actions">
+          <button id="cancelReviewPickerButton" class="sidebar-btn" type="button">取消</button>
+          <button id="confirmReviewPickerButton" class="sidebar-btn link-btn" type="button">开始分析</button>
         </div>
       </section>
     </div>
