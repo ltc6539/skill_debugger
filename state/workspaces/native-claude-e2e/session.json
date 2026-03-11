@@ -1,0 +1,116 @@
+{
+  "created_at": "2026-03-11T05:51:15.019193+00:00",
+  "updated_at": "2026-03-11T07:25:36.729846+00:00",
+  "claude_session_id": null,
+  "last_mode": "agent",
+  "last_forced_skill_id": null,
+  "last_model": null,
+  "turns": [
+    {
+      "turn_id": "05657541ed8e4dbfb4849a3e6c4a000b",
+      "created_at": "2026-03-11T05:51:35.364162+00:00",
+      "mode": "agent",
+      "forced_skill_id": null,
+      "model": "anthropic/claude-opus-4.6",
+      "user_message": "hi",
+      "assistant_message": "The greeting-debug-native skill was triggered.",
+      "trace": [
+        {
+          "trace_id": 1,
+          "type": "tool_call",
+          "tool": "Skill",
+          "tool_use_id": "toolu_vrtx_01UEnNz5iwMbmyy8e2Wk9EHy",
+          "status": "running",
+          "input": {
+            "skill": "greeting-debug-native"
+          },
+          "output": null
+        }
+      ]
+    },
+    {
+      "turn_id": "4b848a9ca44e4b508a76eb37509cf7ef",
+      "created_at": "2026-03-11T05:51:57.384635+00:00",
+      "mode": "agent",
+      "forced_skill_id": null,
+      "model": "anthropic/claude-opus-4.6",
+      "user_message": "what is 2+2?",
+      "assistant_message": "4\n\nNo uploaded skill was triggered — this is a straightforward math question. 😊",
+      "trace": []
+    },
+    {
+      "turn_id": "2f2c846cc31542269c1f2ca2a07cd553",
+      "created_at": "2026-03-11T05:52:13.776641+00:00",
+      "mode": "forced",
+      "forced_skill_id": "greeting-debug-native",
+      "model": "anthropic/claude-opus-4.6",
+      "user_message": "hi",
+      "assistant_message": "The greeting-debug-native skill was triggered.",
+      "trace": [
+        {
+          "trace_id": 1,
+          "type": "tool_call",
+          "tool": "Skill",
+          "tool_use_id": "toolu_vrtx_01Rn9XQ8h9rKHs6VKKkvmLaN",
+          "status": "running",
+          "input": {
+            "skill": "greeting-debug-native"
+          },
+          "output": null
+        }
+      ]
+    },
+    {
+      "turn_id": "41bcf30c9cd94046ad9c77c0fc1ee76d",
+      "created_at": "2026-03-11T05:54:03.161670+00:00",
+      "mode": "agent",
+      "forced_skill_id": null,
+      "model": "anthropic/claude-opus-4.6",
+      "user_message": "hi again",
+      "assistant_message": "The greeting-debug-native skill was triggered.",
+      "trace": [
+        {
+          "trace_id": 1,
+          "type": "tool_call",
+          "tool": "Skill",
+          "tool_use_id": "toolu_vrtx_0185xaetKPt168tCLQQBTUGG",
+          "status": "ok",
+          "input": {
+            "skill": "greeting-debug-native"
+          },
+          "output": {
+            "status": "completed_without_tool_result",
+            "message": "The SDK stream emitted the tool use, but no matching ToolResultBlock was surfaced.",
+            "inferred": true
+          }
+        }
+      ]
+    },
+    {
+      "turn_id": "1a644e67a74c4d25b8c288922e1d1325",
+      "created_at": "2026-03-11T06:20:13.001425+00:00",
+      "mode": "agent",
+      "forced_skill_id": null,
+      "model": "anthropic/claude-opus-4.6",
+      "user_message": "hi",
+      "assistant_message": "The greeting-debug-native skill was triggered.",
+      "trace": [
+        {
+          "trace_id": 1,
+          "type": "tool_call",
+          "tool": "Skill",
+          "tool_use_id": "toolu_vrtx_01QdiQNr4X286w46jj3CyDgQ",
+          "status": "ok",
+          "input": {
+            "skill": "greeting-debug-native"
+          },
+          "output": {
+            "status": "completed_without_tool_result",
+            "message": "The SDK stream emitted the tool use, but no matching ToolResultBlock was surfaced.",
+            "inferred": true
+          }
+        }
+      ]
+    }
+  ]
+}

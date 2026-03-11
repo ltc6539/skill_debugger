@@ -1,0 +1,741 @@
+{
+  "tools": [
+    {
+      "name": "places_text_search",
+      "description": "Search places by text using Places API (New).",
+      "execution_mode": "live_google_maps",
+      "enabled": true,
+      "input_schema": {
+        "properties": {
+          "text_query": {
+            "title": "Text Query",
+            "type": "string"
+          },
+          "location_bias_lat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Bias Lat"
+          },
+          "location_bias_lng": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Bias Lng"
+          },
+          "location_bias_radius_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Bias Radius M"
+          },
+          "included_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Included Types"
+          },
+          "included_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Included Type"
+          },
+          "max_result_count": {
+            "default": 10,
+            "title": "Max Result Count",
+            "type": "integer"
+          },
+          "language_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language Code"
+          },
+          "region_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region Code"
+          },
+          "field_mask": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Field Mask"
+          }
+        },
+        "required": [
+          "text_query",
+          "location_bias_lat",
+          "location_bias_lng",
+          "location_bias_radius_m",
+          "included_types",
+          "included_type",
+          "max_result_count",
+          "language_code",
+          "region_code",
+          "field_mask"
+        ],
+        "title": "places_text_search_args",
+        "type": "object",
+        "additionalProperties": false
+      },
+      "source": "project_catalog:google_maps"
+    },
+    {
+      "name": "places_nearby_search",
+      "description": "Search nearby places using Places API (New).",
+      "execution_mode": "live_google_maps",
+      "enabled": true,
+      "input_schema": {
+        "properties": {
+          "latitude": {
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "title": "Longitude",
+            "type": "number"
+          },
+          "radius_m": {
+            "title": "Radius M",
+            "type": "number"
+          },
+          "included_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Included Types"
+          },
+          "excluded_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excluded Types"
+          },
+          "max_result_count": {
+            "default": 10,
+            "title": "Max Result Count",
+            "type": "integer"
+          },
+          "rank_preference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rank Preference"
+          },
+          "language_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language Code"
+          },
+          "region_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region Code"
+          },
+          "field_mask": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Field Mask"
+          }
+        },
+        "required": [
+          "latitude",
+          "longitude",
+          "radius_m",
+          "included_types",
+          "excluded_types",
+          "max_result_count",
+          "rank_preference",
+          "language_code",
+          "region_code",
+          "field_mask"
+        ],
+        "title": "places_nearby_search_args",
+        "type": "object",
+        "additionalProperties": false
+      },
+      "source": "project_catalog:google_maps"
+    },
+    {
+      "name": "places_details",
+      "description": "Get place details using Places API (New).",
+      "execution_mode": "live_google_maps",
+      "enabled": true,
+      "input_schema": {
+        "properties": {
+          "place_id": {
+            "title": "Place Id",
+            "type": "string"
+          },
+          "field_mask": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Field Mask"
+          },
+          "language_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language Code"
+          },
+          "region_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region Code"
+          }
+        },
+        "required": [
+          "place_id",
+          "field_mask",
+          "language_code",
+          "region_code"
+        ],
+        "title": "places_details_args",
+        "type": "object",
+        "additionalProperties": false
+      },
+      "source": "project_catalog:google_maps"
+    },
+    {
+      "name": "places_autocomplete",
+      "description": "Autocomplete places using Places API (New).",
+      "execution_mode": "live_google_maps",
+      "enabled": true,
+      "input_schema": {
+        "properties": {
+          "input_text": {
+            "title": "Input Text",
+            "type": "string"
+          },
+          "location_bias_lat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Bias Lat"
+          },
+          "location_bias_lng": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Bias Lng"
+          },
+          "location_bias_radius_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Bias Radius M"
+          },
+          "included_primary_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Included Primary Types"
+          },
+          "include_query_predictions": {
+            "default": false,
+            "title": "Include Query Predictions",
+            "type": "boolean"
+          },
+          "language_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language Code"
+          },
+          "region_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region Code"
+          },
+          "field_mask": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Field Mask"
+          }
+        },
+        "required": [
+          "input_text",
+          "location_bias_lat",
+          "location_bias_lng",
+          "location_bias_radius_m",
+          "included_primary_types",
+          "include_query_predictions",
+          "language_code",
+          "region_code",
+          "field_mask"
+        ],
+        "title": "places_autocomplete_args",
+        "type": "object",
+        "additionalProperties": false
+      },
+      "source": "project_catalog:google_maps"
+    },
+    {
+      "name": "gmaps_compute_routes",
+      "description": "Compute routes using Google Routes API.",
+      "execution_mode": "live_google_maps",
+      "enabled": true,
+      "input_schema": {
+        "properties": {
+          "origin": {
+            "description": "Address or \"lat,lng\" or \"place_id:...\".",
+            "title": "Origin",
+            "type": "string"
+          },
+          "destination": {
+            "description": "Address or \"lat,lng\" or \"place_id:...\".",
+            "title": "Destination",
+            "type": "string"
+          },
+          "travel_mode": {
+            "default": "DRIVE",
+            "description": "DRIVE, WALK, BICYCLE, TWO_WHEELER, TRANSIT.",
+            "title": "Travel Mode",
+            "type": "string"
+          },
+          "routing_preference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "TRAFFIC_AWARE",
+            "description": "TRAFFIC_AWARE or TRAFFIC_AWARE_OPTIMAL for driving.",
+            "title": "Routing Preference"
+          },
+          "alternatives": {
+            "default": false,
+            "description": "Whether to compute alternative routes.",
+            "title": "Alternatives",
+            "type": "boolean"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "BCP-47 language code, e.g. en-US.",
+            "title": "Language"
+          },
+          "units": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "METRIC or IMPERIAL.",
+            "title": "Units"
+          },
+          "field_mask": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Response field mask, defaults to duration/distance/polyline/legs.",
+            "title": "Field Mask"
+          }
+        },
+        "required": [
+          "origin",
+          "destination",
+          "travel_mode",
+          "routing_preference",
+          "alternatives",
+          "language",
+          "units",
+          "field_mask"
+        ],
+        "title": "gmaps_compute_routes_args",
+        "type": "object",
+        "additionalProperties": false
+      },
+      "source": "project_catalog:google_maps"
+    },
+    {
+      "name": "gmaps_directions_legacy",
+      "description": "Get directions using Directions API (Legacy).",
+      "execution_mode": "live_google_maps",
+      "enabled": true,
+      "input_schema": {
+        "properties": {
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "destination": {
+            "title": "Destination",
+            "type": "string"
+          },
+          "mode": {
+            "default": "driving",
+            "title": "Mode",
+            "type": "string"
+          },
+          "departure_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Departure Time"
+          },
+          "arrival_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Arrival Time"
+          },
+          "waypoints": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Waypoints"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
+          "alternatives": {
+            "default": false,
+            "title": "Alternatives",
+            "type": "boolean"
+          },
+          "units": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Units"
+          }
+        },
+        "required": [
+          "origin",
+          "destination",
+          "mode",
+          "departure_time",
+          "arrival_time",
+          "waypoints",
+          "language",
+          "region",
+          "alternatives",
+          "units"
+        ],
+        "title": "gmaps_directions_legacy_args",
+        "type": "object",
+        "additionalProperties": false
+      },
+      "source": "project_catalog:google_maps"
+    },
+    {
+      "name": "navigation_link",
+      "description": "Create a navigation deep link for Google Maps or Apple Maps.",
+      "execution_mode": "live_google_maps",
+      "enabled": true,
+      "input_schema": {
+        "properties": {
+          "destination": {
+            "title": "Destination",
+            "type": "string"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin"
+          },
+          "travel_mode": {
+            "default": "driving",
+            "title": "Travel Mode",
+            "type": "string"
+          },
+          "provider": {
+            "default": "google",
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "destination",
+          "origin",
+          "travel_mode",
+          "provider"
+        ],
+        "title": "navigation_link_args",
+        "type": "object",
+        "additionalProperties": false
+      },
+      "source": "project_catalog:google_maps"
+    },
+    {
+      "name": "YELP_SEARCH_BUSINESSES",
+      "description": "Yelp 搜索餐厅。",
+      "execution_mode": "live_yelp",
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      },
+      "source": "project_catalog:yelp"
+    },
+    {
+      "name": "YELP_SEARCH_AND_CHAT",
+      "description": "Yelp 对话式搜索。",
+      "execution_mode": "live_yelp",
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      },
+      "source": "project_catalog:yelp"
+    },
+    {
+      "name": "YELP_GET_BUSINESS_DETAILS",
+      "description": "Yelp 餐厅详情查询，包含电话、营业时间、照片等。",
+      "execution_mode": "live_yelp",
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      },
+      "source": "project_catalog:yelp"
+    },
+    {
+      "name": "YELP_GET_BUSINESS_REVIEWS",
+      "description": "Yelp 评价摘要查询。",
+      "execution_mode": "live_yelp",
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      },
+      "source": "project_catalog:yelp"
+    },
+    {
+      "name": "YELP_GET_REVIEW_HIGHLIGHTS",
+      "description": "Yelp 评价高亮查询。",
+      "execution_mode": "live_yelp",
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      },
+      "source": "project_catalog:yelp"
+    },
+    {
+      "name": "YELP_SEARCH_BY_PHONE",
+      "description": "Yelp 电话反查 business。",
+      "execution_mode": "live_yelp",
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      },
+      "source": "project_catalog:yelp"
+    }
+  ]
+}
