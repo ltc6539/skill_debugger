@@ -746,6 +746,12 @@ body {
   flex-shrink: 0;
 }
 
+.sidebar-link-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
 .sidebar-btn {
   display: flex;
   align-items: center;
@@ -761,6 +767,12 @@ body {
   cursor: pointer;
   transition: all var(--transition);
 }
+
+.compact-link-btn {
+  padding: 8px 6px;
+  font-size: 11px;
+}
+
 .link-btn {
   color: var(--accent);
   text-decoration: none;

@@ -67,6 +67,19 @@ async def tools_page() -> FileResponse:
     return FileResponse(BASE_DIR / "static" / "tools.html")
 
 
+@app.get("/docs/skill-template")
+async def skill_template() -> FileResponse:
+    return FileResponse(BASE_DIR / "SKILL_TEMPLATE.md", media_type="text/markdown; charset=utf-8")
+
+
+@app.get("/docs/claude-skill-guide")
+async def claude_skill_guide() -> FileResponse:
+    return FileResponse(
+        BASE_DIR / "The-Complete-Guide-to-Building-Skill-for-Claude.pdf",
+        media_type="application/pdf",
+    )
+
+
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
