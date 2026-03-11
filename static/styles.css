@@ -848,6 +848,78 @@ body {
   max-height: none;
 }
 
+.confirm-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.confirm-modal.hidden {
+  display: none;
+}
+
+.confirm-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(20, 18, 14, 0.28);
+  backdrop-filter: blur(2px);
+}
+
+.confirm-panel {
+  position: relative;
+  z-index: 1;
+  width: min(460px, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(255, 255, 255, 0.72)),
+    var(--surface);
+  box-shadow: 0 18px 42px rgba(25, 18, 10, 0.18);
+}
+
+.confirm-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.confirm-header-copy {
+  min-width: 0;
+}
+
+.confirm-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.confirm-message {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink-2);
+  white-space: pre-line;
+}
+
+.confirm-close-btn {
+  flex-shrink: 0;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .editor-modal {
   position: fixed;
   inset: 0;

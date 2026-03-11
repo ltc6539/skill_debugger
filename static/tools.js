@@ -6,6 +6,8 @@ const state = {
   busy: false,
 };
 
+const ACTIVE_WORKSPACE_STORAGE_KEY = "skill_debugger.activeWorkspaceId";
+
 const els = {
   workspaceSelect: document.getElementById("workspaceSelect"),
   createWorkspaceButton: document.getElementById("createWorkspaceButton"),
@@ -32,6 +34,34 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function readStoredWorkspaceId() {
+  try {
+    return window.localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function writeStoredWorkspaceId(workspaceId) {
+  try {
+    if (workspaceId) {
+      window.localStorage.setItem(ACTIVE_WORKSPACE_STORAGE_KEY, workspaceId);
+    } else {
+      window.localStorage.removeItem(ACTIVE_WORKSPACE_STORAGE_KEY);
+    }
+  } catch (_error) {
+    // Ignore storage failures in private mode / locked-down browsers.
+  }
+}
+
+function resolvePreferredWorkspaceId(workspaces, fallbackWorkspaceId) {
+  const preferred = String(readStoredWorkspaceId() || "").trim();
+  if (preferred && workspaces.some((ws) => ws.workspace_id === preferred)) {
+    return preferred;
+  }
+  return fallbackWorkspaceId;
+}
+
 async function fetchJson(url, options) {
   const response = await fetch(url, options);
   if (!response.ok) {
@@ -39,6 +69,14 @@ async function fetchJson(url, options) {
     throw new Error(message || `Request failed: ${response.status}`);
   }
   return response.json();
+}
+
+async function confirmDeletion({ title, message, confirmLabel }) {
+  const helper = window.SkillDebuggerConfirm?.confirmDestructiveAction;
+  if (typeof helper === "function") {
+    return helper({ title, message, confirmLabel });
+  }
+  return window.confirm(message);
 }
 
 function setBusy(nextBusy) {
@@ -147,14 +185,20 @@ async function bootstrap() {
   const payload = await fetchJson("/api/bootstrap");
   state.workspaces = payload.workspaces || [];
   state.runtime = payload.runtime || {};
-  state.activeWorkspaceId = payload.current_workspace_id;
-  state.current = payload.current;
+  const preferredWorkspaceId = resolvePreferredWorkspaceId(state.workspaces, payload.current_workspace_id);
+  state.activeWorkspaceId = preferredWorkspaceId;
+  state.current =
+    preferredWorkspaceId && preferredWorkspaceId !== payload.current_workspace_id
+      ? await fetchJson(`/api/workspaces/${preferredWorkspaceId}`)
+      : payload.current;
+  writeStoredWorkspaceId(state.activeWorkspaceId);
   renderAll();
 }
 
 async function loadWorkspace(workspaceId) {
-  state.activeWorkspaceId = workspaceId;
   state.current = await fetchJson(`/api/workspaces/${workspaceId}`);
+  state.activeWorkspaceId = workspaceId;
+  writeStoredWorkspaceId(workspaceId);
   renderAll();
 }
 
@@ -176,6 +220,7 @@ async function createWorkspace() {
   state.activeWorkspaceId = payload.workspace.workspace_id;
   state.current = payload;
   await refreshWorkspaceList();
+  writeStoredWorkspaceId(state.activeWorkspaceId);
   renderAll();
 }
 
@@ -183,9 +228,11 @@ async function deleteCurrentWorkspace() {
   if (!state.activeWorkspaceId || state.busy) return;
   const workspace = state.current?.workspace;
   const name = workspace?.name || state.activeWorkspaceId;
-  const confirmed = window.confirm(
-    `确认删除当前测试空间“${name}”吗？\n\n已上传的 skills、tools 和聊天历史都会被删除。`
-  );
+  const confirmed = await confirmDeletion({
+    title: "删除测试空间",
+    message: `确认删除当前测试空间“${name}”吗？\n\n已上传的 skills、tools 和聊天历史都会被删除。`,
+    confirmLabel: "删除工作区",
+  });
   if (!confirmed) return;
 
   const payload = await fetchJson(`/api/workspaces/${state.activeWorkspaceId}`, {
@@ -195,6 +242,7 @@ async function deleteCurrentWorkspace() {
   state.runtime = payload.runtime || {};
   state.activeWorkspaceId = payload.current_workspace_id;
   state.current = payload.current;
+  writeStoredWorkspaceId(state.activeWorkspaceId);
   renderAll();
 }
 
@@ -261,6 +309,14 @@ async function syncProjectTools(presets) {
 els.workspaceSelect.addEventListener("change", (event) => {
   const workspaceId = event.target.value;
   if (!workspaceId || workspaceId === state.activeWorkspaceId) return;
+  loadWorkspace(workspaceId).catch((error) => window.alert(error.message));
+});
+
+window.addEventListener("storage", (event) => {
+  if (event.key !== ACTIVE_WORKSPACE_STORAGE_KEY) return;
+  const workspaceId = String(event.newValue || "").trim();
+  if (!workspaceId || workspaceId === state.activeWorkspaceId || state.busy) return;
+  if (!state.workspaces.some((ws) => ws.workspace_id === workspaceId)) return;
   loadWorkspace(workspaceId).catch((error) => window.alert(error.message));
 });
 
