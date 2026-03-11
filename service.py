@@ -351,6 +351,26 @@ class SkillDebuggerService:
             self.store.clear_session(workspace_id)
             return self._get_workspace_state(workspace_id, persist_updates=True)
 
+    async def upload_image(
+        self,
+        workspace_id: str,
+        *,
+        filename: str,
+        content: bytes,
+        mime_type: str | None,
+    ) -> dict[str, Any]:
+        async with self._workspace_write(workspace_id):
+            if not content:
+                raise ValueError("Uploaded image is empty.")
+            if mime_type and not mime_type.startswith("image/"):
+                raise ValueError(f"Only image uploads are supported, got: {mime_type}")
+            return self.store.save_uploaded_image(
+                workspace_id,
+                filename=filename,
+                content=content,
+                mime_type=mime_type,
+            )
+
     async def upload_skills(self, workspace_id: str, files: list[tuple[str, bytes]]) -> dict[str, Any]:
         async with self._workspace_write(workspace_id):
             self.store.ensure_native_skill_layout(workspace_id)
@@ -487,11 +507,14 @@ class SkillDebuggerService:
         mode: DebuggerMode,
         forced_skill_id: str | None = None,
         model: str | None = None,
+        image_ids: list[str] | None = None,
     ):
         async with self._workspace_write(workspace_id):
             prompt = message.strip()
-            if not prompt:
+            attached_images = self._load_attached_images(workspace_id, image_ids or [])
+            if not prompt and not attached_images:
                 raise ValueError("Message cannot be empty.")
+            effective_prompt = self._build_prompt_with_attached_images(prompt, attached_images)
 
             registry = self._load_registry(workspace_id)
             workspace_skill_ids = [meta.skill_id for meta in registry.skills]
@@ -523,7 +546,7 @@ class SkillDebuggerService:
                 visible_skill_ids=visible_skill_ids,
             )
             trace_collector = ToolTraceCollector()
-            tools = self._build_tools(tool_registry, stub_runtime, trace_collector)
+            tools = self._build_tools(workspace_id, tool_registry, stub_runtime, trace_collector)
             mcp_servers = {"skill_debugger": create_sdk_mcp_server("skill-debugger", tools=tools)} if tools else {}
             effective_model = model or self.settings.default_model
 
@@ -558,10 +581,11 @@ class SkillDebuggerService:
                     "forced_skill_id": forced_skill_id,
                     "model": effective_model,
                     "visible_skill_ids": visible_skill_ids,
+                    "attached_images": attached_images,
                 },
             }
 
-            async for sdk_message in self.runtime.stream(prompt, options):
+            async for sdk_message in self.runtime.stream(effective_prompt, options):
                 if isinstance(sdk_message, StreamEvent):
                     delta = _extract_text_delta(sdk_message.event)
                     if delta:
@@ -599,6 +623,7 @@ class SkillDebuggerService:
                 user_message=prompt,
                 assistant_message=assistant_text,
                 trace=trace_collector.trace_events,
+                attached_images=attached_images,
                 mode=mode,
                 forced_skill_id=forced_skill_id,
                 model=effective_model,
@@ -725,6 +750,7 @@ class SkillDebuggerService:
             "Use Claude's native skill discovery flow to decide whether a project skill applies.",
             "Prefer answering directly when possible.",
             "Google Maps and Yelp workspace tools are live in this debugger and do hit real backends when called.",
+            "If the user attached images in this turn, their image_id values will appear in the user message context. Use `recognize_image` before making visual claims.",
             "Any other workspace tools remain debug stubs: use realistic arguments, but they will not touch production backends.",
             "Tool reads, skill loads, and tool calls are recorded for debugging.",
             "If no uploaded project skill applies, answer directly and say that no uploaded skill was triggered.",
@@ -748,6 +774,7 @@ class SkillDebuggerService:
 
     def _build_tools(
         self,
+        workspace_id: str,
         tool_registry: WorkspaceToolRegistry,
         tool_runtime: StubToolRuntime,
         trace_collector: ToolTraceCollector,
@@ -761,7 +788,7 @@ class SkillDebuggerService:
                 if meta.execution_mode.startswith("live_")
                 else meta
             )
-            tool_defs.append(self._make_runtime_tool(tool_runtime, runtime_meta, trace_collector))
+            tool_defs.append(self._make_runtime_tool(workspace_id, tool_runtime, runtime_meta, trace_collector))
         return tool_defs
 
     def _prepare_runtime_project(
@@ -948,8 +975,66 @@ class SkillDebuggerService:
             return False
         return True
 
+    def _load_attached_images(self, workspace_id: str, image_ids: list[str]) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for raw in image_ids:
+            image_id = str(raw or "").strip()
+            if not image_id or image_id in seen:
+                continue
+            seen.add(image_id)
+            payload = self.store.get_uploaded_image(workspace_id, image_id)
+            items.append(
+                {
+                    "image_id": payload["image_id"],
+                    "filename": payload["filename"],
+                    "mime_type": payload["mime_type"],
+                    "size_bytes": payload["size_bytes"],
+                    "url": payload["url"],
+                }
+            )
+        return items
+
+    @staticmethod
+    def _build_prompt_with_attached_images(prompt: str, attached_images: list[dict[str, Any]]) -> str:
+        if not attached_images:
+            return prompt
+        lines = [prompt] if prompt else ["The user uploaded image attachments without additional text."]
+        lines.extend(["", "Attached images for this turn:"])
+        for index, image in enumerate(attached_images, start=1):
+            lines.append(
+                f"{index}. image_id={image['image_id']} · filename={image['filename']} · mime_type={image['mime_type']}"
+            )
+        lines.append(
+            "If visual understanding is required, call `recognize_image` with the relevant `image_id`. Do not claim image details unless you actually use that tool."
+        )
+        return "\n".join(lines)
+
+    def _prepare_runtime_tool_args(
+        self,
+        workspace_id: str,
+        tool_name: str,
+        args: dict[str, Any],
+    ) -> dict[str, Any]:
+        runtime_args = dict(args)
+        if tool_name != "recognize_image":
+            return runtime_args
+        has_explicit_source = any(
+            str(runtime_args.get(field) or "").strip()
+            for field in ("image_url", "image_base64", "image_path")
+        )
+        image_id = str(runtime_args.get("image_id") or "").strip()
+        if has_explicit_source or not image_id:
+            return runtime_args
+        image_meta = self.store.get_uploaded_image(workspace_id, image_id)
+        image_path = self.store.get_uploaded_image_path(workspace_id, image_id)
+        runtime_args["image_path"] = str(image_path)
+        runtime_args.setdefault("mime_type", image_meta.get("mime_type"))
+        return runtime_args
+
     def _make_runtime_tool(
         self,
+        workspace_id: str,
         tool_runtime: StubToolRuntime,
         tool_meta: WorkspaceToolMeta,
         trace_collector: ToolTraceCollector,
@@ -963,9 +1048,11 @@ class SkillDebuggerService:
         async def runtime_tool(args: dict[str, Any]) -> dict[str, Any]:
             parsed_output: Any
             status = "ok"
+            original_args = dict(args)
             if tool_meta.execution_mode.startswith("live_"):
                 try:
-                    text = await self.project_tool_runtime.execute(tool_meta.name, dict(args))
+                    runtime_args = self._prepare_runtime_tool_args(workspace_id, tool_meta.name, original_args)
+                    text = await self.project_tool_runtime.execute(tool_meta.name, runtime_args)
                     parsed_output = _maybe_parse_json_text(text)
                 except Exception as exc:
                     status = "error"
@@ -985,7 +1072,7 @@ class SkillDebuggerService:
 
             trace_collector.record_local_tool_execution(
                 tool_name=_sdk_workspace_tool_name(tool_meta.name),
-                tool_input=dict(args),
+                tool_input=original_args,
                 output=parsed_output,
                 status=status,
             )

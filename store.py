@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import mimetypes
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -84,6 +86,9 @@ class WorkspaceStore:
     def tools_path(self, workspace_id: str) -> Path:
         return self.workspace_dir(workspace_id) / "tools.json"
 
+    def images_dir(self, workspace_id: str) -> Path:
+        return self.workspace_dir(workspace_id) / "images"
+
     def skill_dir(self, workspace_id: str, skill_dir_name: str) -> Path:
         return self.skills_dir(workspace_id) / skill_dir_name
 
@@ -138,6 +143,7 @@ class WorkspaceStore:
         user_message: str,
         assistant_message: str,
         trace: list[dict],
+        attached_images: list[dict] | None = None,
         mode: str,
         forced_skill_id: str | None,
         model: str | None,
@@ -157,10 +163,63 @@ class WorkspaceStore:
                 "model": model,
                 "user_message": user_message,
                 "assistant_message": assistant_message,
+                "attached_images": list(attached_images or []),
                 "trace": trace,
             }
         )
         return self.save_session(workspace_id, session)
+
+    def save_uploaded_image(
+        self,
+        workspace_id: str,
+        *,
+        filename: str,
+        content: bytes,
+        mime_type: str | None,
+    ) -> dict:
+        with self._lock:
+            self.get_workspace(workspace_id)
+            images_dir = self.images_dir(workspace_id)
+            images_dir.mkdir(parents=True, exist_ok=True)
+
+            image_id = f"img_{uuid4().hex[:12]}"
+            safe_name = self._sanitize_filename(filename)
+            suffix = Path(safe_name).suffix
+            if not suffix:
+                suffix = mimetypes.guess_extension(mime_type or "") or ".bin"
+                safe_name = f"{safe_name}{suffix}"
+            stored_name = f"{image_id}{suffix.lower()}"
+            blob_path = images_dir / stored_name
+            blob_path.write_bytes(content)
+
+            payload = {
+                "image_id": image_id,
+                "filename": safe_name,
+                "mime_type": mime_type or "application/octet-stream",
+                "size_bytes": len(content),
+                "stored_name": stored_name,
+                "created_at": utcnow_iso(),
+                "url": f"/api/workspaces/{workspace_id}/images/{image_id}",
+            }
+            self._write_json(self._image_meta_path(workspace_id, image_id), payload)
+            self.touch_workspace(workspace_id)
+            return payload
+
+    def get_uploaded_image(self, workspace_id: str, image_id: str) -> dict:
+        self.get_workspace(workspace_id)
+        meta_path = self._image_meta_path(workspace_id, image_id)
+        if not meta_path.exists():
+            raise KeyError(f"Image not found: {image_id}")
+        payload = json.loads(meta_path.read_text(encoding="utf-8"))
+        payload["url"] = f"/api/workspaces/{workspace_id}/images/{image_id}"
+        return payload
+
+    def get_uploaded_image_path(self, workspace_id: str, image_id: str) -> Path:
+        payload = self.get_uploaded_image(workspace_id, image_id)
+        path = self.images_dir(workspace_id) / str(payload.get("stored_name") or "")
+        if not path.exists():
+            raise KeyError(f"Image blob not found: {image_id}")
+        return path
 
     def write_skill(self, workspace_id: str, skill_dir_name: str, content: str) -> Path:
         return self.write_skill_package(workspace_id, skill_dir_name, {"SKILL.md": content.encode("utf-8")}) / "SKILL.md"
@@ -268,6 +327,16 @@ class WorkspaceStore:
     @staticmethod
     def _empty_tools() -> dict:
         return {"tools": []}
+
+    def _image_meta_path(self, workspace_id: str, image_id: str) -> Path:
+        return self.images_dir(workspace_id) / f"{image_id}.json"
+
+    @staticmethod
+    def _sanitize_filename(filename: str | None) -> str:
+        raw = Path(str(filename or "image")).name
+        stem = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(raw).stem).strip(".-") or "image"
+        suffix = re.sub(r"[^A-Za-z0-9.]+", "", Path(raw).suffix)[:12]
+        return f"{stem}{suffix}"
 
     @staticmethod
     def _write_json(path: Path, payload: dict) -> None:

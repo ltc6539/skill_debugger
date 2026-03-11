@@ -42,6 +42,7 @@ class ChatRequest(BaseModel):
     mode: Literal["agent", "forced"] = "agent"
     forced_skill_id: str | None = None
     model: str | None = None
+    image_ids: list[str] | None = None
 
 
 class CreateToolRequest(BaseModel):
@@ -168,6 +169,34 @@ async def update_skill_document(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/api/workspaces/{workspace_id}/images")
+async def upload_image(workspace_id: str, file: UploadFile = File(...)) -> dict:
+    try:
+        if not file.filename:
+            raise ValueError("Image filename cannot be empty.")
+        content = await file.read()
+        return await service.upload_image(
+            workspace_id,
+            filename=file.filename,
+            content=content,
+            mime_type=file.content_type,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/workspaces/{workspace_id}/images/{image_id}")
+async def get_uploaded_image(workspace_id: str, image_id: str) -> FileResponse:
+    try:
+        path = store.get_uploaded_image_path(workspace_id, image_id)
+        image = store.get_uploaded_image(workspace_id, image_id)
+        return FileResponse(path, media_type=image.get("mime_type") or "application/octet-stream")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.post("/api/workspaces/{workspace_id}/tools")
 async def create_tool(workspace_id: str, payload: CreateToolRequest) -> dict:
     try:
@@ -214,6 +243,7 @@ async def chat_stream(workspace_id: str, payload: ChatRequest) -> StreamingRespo
                 mode=payload.mode,
                 forced_skill_id=payload.forced_skill_id,
                 model=payload.model,
+                image_ids=payload.image_ids,
             ):
                 yield f"event: {event['event']}\ndata: {json.dumps(event['data'], ensure_ascii=False)}\n\n"
         except KeyError as exc:

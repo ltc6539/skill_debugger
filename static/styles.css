@@ -1035,6 +1035,78 @@ body {
   border-bottom-left-radius: 4px;
 }
 
+.attachment-strip {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.attachment-strip.compact {
+  margin-top: 8px;
+}
+
+.attachment-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 10px;
+  width: min(280px, 100%);
+  padding: 8px;
+  border: 1px solid rgba(48, 38, 28, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: var(--shadow-soft);
+}
+
+.attachment-thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 10px;
+  background: rgba(48, 38, 28, 0.06);
+}
+
+.attachment-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+.attachment-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-submeta {
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+.attachment-remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(48, 38, 28, 0.10);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.attachment-remove:hover {
+  background: rgba(48, 38, 28, 0.16);
+}
+
 .msg-bubble.markdown-body {
   white-space: normal;
 }
@@ -1179,6 +1251,15 @@ body {
   padding: 10px 20px 16px;
 }
 
+.composer-attachments {
+  display: none;
+  margin-bottom: 10px;
+}
+
+.composer-attachments.has-items {
+  display: block;
+}
+
 .mode-bar {
   display: flex;
   align-items: center;
@@ -1245,6 +1326,32 @@ body {
   align-items: flex-end;
   gap: 8px;
 }
+
+.attach-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--ink-2);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--transition);
+}
+
+.attach-btn:hover {
+  border-color: var(--accent-mid);
+  color: var(--accent);
+}
+
+.attach-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .input-row textarea {
   flex: 1;
   resize: none;

@@ -8,6 +8,7 @@ const state = {
   activeWorkspaceId: null,
   current: null,
   pendingTurn: null,
+  pendingImages: [],
   runtime: null,
   busy: false,
   pendingAssistantBubble: null,
@@ -28,6 +29,9 @@ const els = {
   turnCount: document.getElementById("turnCount"),
   chatLog: document.getElementById("chatLog"),
   chatForm: document.getElementById("chatForm"),
+  composerAttachments: document.getElementById("composerAttachments"),
+  chatImageInput: document.getElementById("chatImageInput"),
+  attachImageButton: document.getElementById("attachImageButton"),
   chatInput: document.getElementById("chatInput"),
   traceLog: document.getElementById("traceLog"),
   forcedSkillSelect: document.getElementById("forcedSkillSelect"),
@@ -284,6 +288,58 @@ function truncate(str, len) {
   return str.length > len ? str.slice(0, len) + "..." : str;
 }
 
+function formatFileSize(bytes) {
+  const value = Number(bytes || 0);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function createImageAttachmentStrip(images, options = {}) {
+  const items = Array.isArray(images) ? images : [];
+  if (!items.length) return null;
+
+  const strip = document.createElement("div");
+  strip.className = `attachment-strip${options.compact ? " compact" : ""}`;
+
+  items.forEach((image) => {
+    const card = document.createElement("div");
+    card.className = "attachment-card";
+
+    const thumb = document.createElement("img");
+    thumb.className = "attachment-thumb";
+    thumb.src = image.url;
+    thumb.alt = image.filename || "uploaded image";
+    thumb.loading = "lazy";
+    card.appendChild(thumb);
+
+    const meta = document.createElement("div");
+    meta.className = "attachment-meta";
+    meta.innerHTML = `
+      <div class="attachment-name">${escapeHtml(image.filename || image.image_id || "image")}</div>
+      <div class="attachment-submeta">${escapeHtml(image.mime_type || "image")} ${image.size_bytes ? `· ${escapeHtml(formatFileSize(image.size_bytes))}` : ""}</div>
+    `;
+    card.appendChild(meta);
+
+    if (options.removable) {
+      const removeButton = document.createElement("button");
+      removeButton.type = "button";
+      removeButton.className = "attachment-remove";
+      removeButton.setAttribute("aria-label", `移除 ${image.filename || image.image_id || "图片"}`);
+      removeButton.textContent = "×";
+      removeButton.addEventListener("click", () => {
+        options.onRemove?.(image.image_id);
+      });
+      card.appendChild(removeButton);
+    }
+
+    strip.appendChild(card);
+  });
+
+  return strip;
+}
+
 function getTraceTimeline() {
   const sessionTurns = state.current?.session?.turns || [];
   const groups = [];
@@ -350,6 +406,8 @@ function setBusy(nextBusy) {
   els.deleteWorkspaceButton.disabled = nextBusy;
   els.workspaceSelect.disabled = nextBusy;
   els.clearContextButton.disabled = nextBusy;
+  els.chatImageInput.disabled = nextBusy;
+  els.attachImageButton.disabled = nextBusy;
   els.chatInput.disabled = nextBusy;
   els.skillFiles.disabled = nextBusy;
   els.skillFolderFiles.disabled = nextBusy;
@@ -548,6 +606,22 @@ function renderHeader() {
   }
 }
 
+function renderComposerAttachments() {
+  if (!els.composerAttachments) return;
+  els.composerAttachments.innerHTML = "";
+  const strip = createImageAttachmentStrip(state.pendingImages, {
+    removable: true,
+    onRemove: (imageId) => {
+      state.pendingImages = state.pendingImages.filter((item) => item.image_id !== imageId);
+      renderComposerAttachments();
+    },
+  });
+  if (strip) {
+    els.composerAttachments.appendChild(strip);
+  }
+  els.composerAttachments.classList.toggle("has-items", Boolean(strip));
+}
+
 /* ---- render: chat ---- */
 
 function createMessageNode(role, text, options = {}) {
@@ -590,6 +664,13 @@ function renderChat() {
   turns.forEach((turn, index) => {
     const isStreaming = Boolean(state.pendingTurn) && index === turns.length - 1;
     const userNode = createMessageNode("user", turn.user_message || "");
+    if (!String(turn.user_message || "").trim()) {
+      userNode.bubble.remove();
+    }
+    const userAttachments = createImageAttachmentStrip(turn.attached_images || [], { compact: true });
+    if (userAttachments) {
+      userNode.wrapper.appendChild(userAttachments);
+    }
     els.chatLog.appendChild(userNode.wrapper);
 
     const assistantNode = createMessageNode("assistant", turn.assistant_message || "", {
@@ -688,6 +769,7 @@ function renderAll() {
   renderSkills();
   renderTools();
   renderHeader();
+  renderComposerAttachments();
   renderChat();
   renderTrace();
 }
@@ -730,6 +812,7 @@ async function bootstrap() {
 async function loadWorkspace(workspaceId) {
   state.activeWorkspaceId = workspaceId;
   state.pendingTurn = null;
+  state.pendingImages = [];
   resetStreamingDomRefs();
   state.current = await fetchJson(`/api/workspaces/${workspaceId}`);
   renderAll();
@@ -746,6 +829,7 @@ async function createWorkspace() {
   });
   state.activeWorkspaceId = payload.workspace.workspace_id;
   state.current = payload;
+  state.pendingImages = [];
   state.workspaces = await fetchJson("/api/workspaces").then((data) => data.workspaces || []);
   renderAll();
 }
@@ -767,6 +851,7 @@ async function deleteCurrentWorkspace() {
   state.activeWorkspaceId = payload.current_workspace_id;
   state.current = payload.current;
   state.pendingTurn = null;
+  state.pendingImages = [];
   resetStreamingDomRefs();
   renderAll();
 }
@@ -792,6 +877,38 @@ async function uploadSkills(fileList) {
     els.skillFiles.value = "";
     els.skillFolderFiles.value = "";
     renderAll();
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function uploadImages(fileList) {
+  if (!state.activeWorkspaceId) return;
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+
+  setBusy(true);
+  try {
+    for (const file of files) {
+      if (!String(file.type || "").startsWith("image/")) {
+        throw new Error(`只支持图片上传：${file.name}`);
+      }
+      const formData = new FormData();
+      formData.append("file", file);
+      const payload = await fetchJson(
+        `/api/workspaces/${state.activeWorkspaceId}/images`,
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
+      state.pendingImages = [
+        ...state.pendingImages.filter((item) => item.image_id !== payload.image_id),
+        payload,
+      ];
+    }
+    els.chatImageInput.value = "";
+    renderComposerAttachments();
   } finally {
     setBusy(false);
   }
@@ -892,6 +1009,7 @@ async function deleteTool(toolName) {
 async function clearContext() {
   if (!state.activeWorkspaceId) return;
   state.pendingTurn = null;
+  state.pendingImages = [];
   resetStreamingDomRefs();
   state.current = await fetchJson(
     `/api/workspaces/${state.activeWorkspaceId}/context/clear`,
@@ -905,16 +1023,19 @@ async function sendChat(event) {
   if (!state.activeWorkspaceId || state.busy) return;
 
   const message = els.chatInput.value.trim();
-  if (!message) return;
+  if (!message && !state.pendingImages.length) return;
 
   const mode = currentMode();
   const forcedSkillId = mode === "forced" ? els.forcedSkillSelect.value : null;
+  const attachedImages = [...state.pendingImages];
 
   state.pendingTurn = {
     user_message: message,
     assistant_message: "",
+    attached_images: attachedImages,
     trace: [],
   };
+  state.pendingImages = [];
   resetStreamingDomRefs();
   els.chatInput.value = "";
   els.chatInput.style.height = "auto";
@@ -930,6 +1051,7 @@ async function sendChat(event) {
         message,
         mode,
         forced_skill_id: forcedSkillId || null,
+        image_ids: attachedImages.map((item) => item.image_id),
       }),
     }
   );
@@ -1010,6 +1132,16 @@ els.skillFiles.addEventListener("change", () => {
 
 els.skillFolderFiles.addEventListener("change", () => {
   uploadSkills(els.skillFolderFiles.files).catch((error) => window.alert(error.message));
+});
+
+els.attachImageButton.addEventListener("click", () => {
+  if (!state.busy) {
+    els.chatImageInput.click();
+  }
+});
+
+els.chatImageInput.addEventListener("change", () => {
+  uploadImages(els.chatImageInput.files).catch((error) => window.alert(error.message));
 });
 
 els.clearContextButton.addEventListener("click", clearContext);

@@ -736,6 +736,145 @@
         "additionalProperties": true
       },
       "source": "project_catalog:yelp"
+    },
+    {
+      "name": "recognize_image",
+      "description": "Recognize food or ingredient images with an OpenRouter VLM model.",
+      "execution_mode": "live_openrouter_vlm",
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "image_id": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "food",
+              "ingredient",
+              "general"
+            ]
+          },
+          "image_url": {
+            "type": "string"
+          },
+          "image_base64": {
+            "type": "string"
+          },
+          "image_path": {
+            "type": "string"
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "prompt_hint": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "source": "project_catalog:eat_agent"
+    },
+    {
+      "name": "get_calendar_events",
+      "description": "Read upcoming calendar events from the debugger's local calendar store.",
+      "execution_mode": "live_debug_calendar",
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "time_min": {
+            "type": "string"
+          },
+          "time_max": {
+            "type": "string"
+          },
+          "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "calendar_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "source": "project_catalog:eat_agent"
+    },
+    {
+      "name": "create_calendar_event",
+      "description": "Create a calendar event inside the debugger's local calendar store.",
+      "execution_mode": "live_debug_calendar",
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string"
+          },
+          "start_time": {
+            "type": "string"
+          },
+          "end_time": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "attendees": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          "calendar_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary",
+          "start_time",
+          "end_time"
+        ],
+        "additionalProperties": false
+      },
+      "source": "project_catalog:eat_agent"
+    },
+    {
+      "name": "canvas_card",
+      "description": "Return the provided JSON payload as a ready-to-render canvas card.",
+      "execution_mode": "live_canvas_card",
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      },
+      "source": "project_catalog:eat_agent"
+    },
+    {
+      "name": "REQUEST_CARD_INPUT",
+      "description": "",
+      "execution_mode": "stub",
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      },
+      "source": "manual"
     }
   ]
 }

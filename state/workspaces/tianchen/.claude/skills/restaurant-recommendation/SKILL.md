@@ -2,7 +2,7 @@
 name: restaurant-recommendation
 description: 基于用户的位置、时间、人数、预算、健康状态和口味偏好，从 Yelp 和 Google Maps 中筛选并推荐最适合的餐厅，以动态卡片形式呈现。
 user-invocable: true
-allowed-tools: [get_user_profile, YELP_SEARCH_BUSINESSES, YELP_SEARCH_AND_CHAT, YELP_GET_BUSINESS_DETAILS, YELP_GET_BUSINESS_REVIEWS, YELP_GET_REVIEW_HIGHLIGHTS, places_text_search, places_details, log_preference_event, twilio_call_restaurant, REQUEST_CARD_INPUT]
+allowed-tools: [get_user_profile, YELP_SEARCH_BUSINESSES, YELP_SEARCH_AND_CHAT, YELP_GET_BUSINESS_DETAILS, YELP_GET_BUSINESS_REVIEWS, YELP_GET_REVIEW_HIGHLIGHTS, places_text_search, places_details, log_preference_event, twilio_call_restaurant, REQUEST_CARD_INPUT, test]
 legacy_id: SKILL_02
 license: MIT
 ---

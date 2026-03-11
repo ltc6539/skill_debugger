@@ -261,7 +261,7 @@ async def _handle_recognize_image(args: dict[str, Any]) -> dict[str, Any]:
     image_reference = _read_image_reference(args)
     if image_reference is None:
         return _tool_error(
-            "Provide one of `image_url`, `image_base64`, or `image_path`. `image_id` alone cannot be resolved inside skill_debugger.",
+            "Provide one of `image_url`, `image_base64`, or `image_path`, or use a valid uploaded `image_id` through the chat workflow.",
             code="missing_image_source",
             extra={"image_id": str(args.get("image_id") or "").strip() or None},
         )
