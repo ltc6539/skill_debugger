@@ -4,6 +4,7 @@ import asyncio
 import copy
 import io
 import json
+import logging
 import re
 import shutil
 import zipfile
@@ -13,7 +14,17 @@ from pathlib import Path, PurePosixPath
 from threading import Lock
 from typing import Any, Literal
 
+logger = logging.getLogger(__name__)
+
+import dataclasses
+
 from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server, tool
+from claude_agent_sdk._errors import (
+    CLIConnectionError,
+    CLINotFoundError,
+    ClaudeSDKError,
+    ProcessError,
+)
 from claude_agent_sdk.types import (
     AssistantMessage,
     ResultMessage,
@@ -592,30 +603,58 @@ class SkillDebuggerService:
                 },
             }
 
-            async for sdk_message in self.runtime.stream(effective_prompt, options):
-                if isinstance(sdk_message, StreamEvent):
-                    delta = _extract_text_delta(sdk_message.event)
-                    if delta:
-                        streamed_text_parts.append(delta)
-                        yield {"event": "token", "data": {"delta": delta}}
+            max_attempts = 2 if options.resume else 1
+            succeeded = False
 
-                if isinstance(sdk_message, AssistantMessage):
-                    for block in sdk_message.content:
-                        if isinstance(block, TextBlock):
-                            final_text_parts.append(block.text)
-                        elif isinstance(block, ToolUseBlock):
-                            trace_collector.record_tool_use(block)
-                        elif isinstance(block, ToolResultBlock):
-                            trace_collector.record_tool_result(block)
-                        elif isinstance(block, ThinkingBlock):
-                            continue
+            for attempt in range(1, max_attempts + 1):
+                current_opts = options if attempt == 1 else dataclasses.replace(options, resume=None)
+                try:
+                    async for sdk_message in self.runtime.stream(effective_prompt, current_opts):
+                        if isinstance(sdk_message, StreamEvent):
+                            delta = _extract_text_delta(sdk_message.event)
+                            if delta:
+                                streamed_text_parts.append(delta)
+                                yield {"event": "token", "data": {"delta": delta}}
 
-                if isinstance(sdk_message, ResultMessage):
-                    claude_session_id = sdk_message.session_id
-                    result_text = sdk_message.result
+                        if isinstance(sdk_message, AssistantMessage):
+                            for block in sdk_message.content:
+                                if isinstance(block, TextBlock):
+                                    final_text_parts.append(block.text)
+                                elif isinstance(block, ToolUseBlock):
+                                    trace_collector.record_tool_use(block)
+                                elif isinstance(block, ToolResultBlock):
+                                    trace_collector.record_tool_result(block)
+                                elif isinstance(block, ThinkingBlock):
+                                    continue
 
-                for trace_event in trace_collector.drain_pending_events():
-                    yield {"event": "trace", "data": trace_event}
+                        if isinstance(sdk_message, ResultMessage):
+                            claude_session_id = sdk_message.session_id
+                            result_text = sdk_message.result
+
+                        for trace_event in trace_collector.drain_pending_events():
+                            yield {"event": "trace", "data": trace_event}
+
+                    succeeded = True
+                    break
+                except Exception as exc:
+                    user_msg, is_retryable = self._classify_cli_error(exc)
+                    logger.warning(
+                        "CLI error (attempt %d/%d, retryable=%s): %s",
+                        attempt, max_attempts, is_retryable, exc,
+                    )
+
+                    if is_retryable and attempt < max_attempts:
+                        self.store.invalidate_runtime_session(workspace_id)
+                        streamed_text_parts.clear()
+                        final_text_parts.clear()
+                        trace_collector = ToolTraceCollector()
+                        continue
+
+                    yield {"event": "error", "data": {"message": user_msg}}
+                    return
+
+            if not succeeded:
+                return
 
             trace_collector.finalize_pending()
             for trace_event in trace_collector.drain_pending_events():
@@ -645,6 +684,39 @@ class SkillDebuggerService:
                     "session": session,
                 },
             }
+
+    @staticmethod
+    def _classify_cli_error(exc: Exception) -> tuple[str, bool]:
+        """Return (user_message, is_retryable) for a CLI error."""
+        stderr_text = getattr(exc, "stderr", None) or ""
+        exit_code = getattr(exc, "exit_code", None)
+
+        if isinstance(exc, CLINotFoundError):
+            return "Claude CLI is not installed or not found on this server.", False
+
+        if isinstance(exc, CLIConnectionError):
+            return "Unable to connect to Claude CLI. The service may be restarting.", True
+
+        if isinstance(exc, ProcessError):
+            lower = stderr_text.lower() if stderr_text else str(exc).lower()
+            # Session / resume failures are retryable
+            if "session" in lower or "resume" in lower or exit_code == 1:
+                return "Session expired, retrying with a fresh session...", True
+            if "api key" in lower or "auth" in lower or "unauthorized" in lower:
+                return "Authentication error. Please check your API key configuration.", False
+            if "rate limit" in lower or "429" in lower:
+                return "Rate limited by the API. Please wait a moment and try again.", False
+            # Generic process error — include stderr snippet for diagnosis
+            snippet = (stderr_text[:200] + "...") if len(stderr_text) > 200 else stderr_text
+            msg = f"CLI process failed (exit code {exit_code})."
+            if snippet:
+                msg += f" Details: {snippet}"
+            return msg, False
+
+        if isinstance(exc, ClaudeSDKError):
+            return f"SDK error: {exc}", False
+
+        return f"Unexpected error: {type(exc).__name__}", False
 
     def _load_registry(self, workspace_id: str) -> UploadedSkillRegistry:
         self.store.ensure_native_skill_layout(workspace_id)

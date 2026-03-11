@@ -58,7 +58,9 @@ class SkillDebuggerSettings:
         return bool(self.composio_api_key)
 
     def runtime_env(self) -> dict[str, str]:
-        env: dict[str, str] = {}
+        env: dict[str, str] = {
+            "CLAUDECODE": "",  # Prevent nested-session detection in spawned CLI
+        }
         if self.openrouter_enabled:
             env.update(
                 {
@@ -66,7 +68,6 @@ class SkillDebuggerSettings:
                     "OPENROUTER_BASE_URL": self.openrouter_base_url,
                     "ANTHROPIC_BASE_URL": self.openrouter_base_url,
                     "ANTHROPIC_AUTH_TOKEN": self.openrouter_api_key or "",
-                    "ANTHROPIC_API_KEY": "",
                 }
             )
         if self.default_model:

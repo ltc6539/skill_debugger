@@ -1070,6 +1070,102 @@ async function clearContext() {
   renderAll();
 }
 
+function appendRetryButton(retryPayload) {
+  if (!retryPayload || !state.pendingAssistantBubble) return;
+  const bubble = state.pendingAssistantBubble;
+  const btn = document.createElement("button");
+  btn.className = "retry-btn";
+  btn.textContent = "Retry";
+  btn.addEventListener("click", () => {
+    // Remove the error turn from display
+    state.pendingTurn = null;
+    resetStreamingDomRefs();
+    renderAll();
+    // Re-submit the original message
+    retrySendChat(retryPayload);
+  });
+  bubble.appendChild(btn);
+}
+
+async function retrySendChat({ message, mode, forcedSkillId, attachedImages }) {
+  if (!state.activeWorkspaceId || state.busy) return;
+  state.pendingTurn = {
+    user_message: message,
+    assistant_message: "",
+    attached_images: attachedImages || [],
+    trace: [],
+  };
+  state.pendingImages = [];
+  resetStreamingDomRefs();
+  renderAll();
+  setBusy(true);
+
+  const response = await fetch(
+    `/api/workspaces/${state.activeWorkspaceId}/chat/stream`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message,
+        mode,
+        forced_skill_id: forcedSkillId || null,
+        image_ids: (attachedImages || []).map((item) => item.image_id),
+      }),
+    }
+  );
+
+  if (!response.ok || !response.body) {
+    setBusy(false);
+    throw new Error(`chat stream failed: ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalized = false;
+  let hadError = false;
+
+  while (!finalized) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    buffer = parseSse(buffer, (eventName, payload) => {
+      if (eventName === "token") {
+        state.pendingTurn.assistant_message += payload.delta || "";
+        updatePendingAssistantMessage();
+      }
+      if (eventName === "trace") {
+        state.pendingTurn.trace.push(payload);
+        renderHeader();
+        renderTrace();
+      }
+      if (eventName === "done") {
+        state.current.session = payload.session;
+        state.pendingTurn = null;
+        finalized = true;
+      }
+      if (eventName === "error") {
+        state.pendingTurn.assistant_message = payload.message || "Runtime error";
+        state.pendingTurn._errorMessage = true;
+        state.pendingTurn._retryPayload = { message, mode, forcedSkillId, attachedImages };
+        updatePendingAssistantMessage();
+        hadError = true;
+        finalized = true;
+      }
+    });
+  }
+
+  if (state.pendingTurn && finalized && !hadError) {
+    state.pendingTurn = null;
+    resetStreamingDomRefs();
+  }
+  setBusy(false);
+  if (hadError && state.pendingTurn) {
+    appendRetryButton(state.pendingTurn._retryPayload);
+  }
+  renderAll();
+}
+
 async function sendChat(event) {
   event.preventDefault();
   if (!state.activeWorkspaceId || state.busy) return;
@@ -1140,6 +1236,8 @@ async function sendChat(event) {
       }
       if (eventName === "error") {
         state.pendingTurn.assistant_message = payload.message || "Runtime error";
+        state.pendingTurn._errorMessage = true;
+        state.pendingTurn._retryPayload = { message, mode, forcedSkillId, attachedImages };
         updatePendingAssistantMessage();
         hadError = true;
         finalized = true;
@@ -1152,6 +1250,9 @@ async function sendChat(event) {
     resetStreamingDomRefs();
   }
   setBusy(false);
+  if (hadError && state.pendingTurn) {
+    appendRetryButton(state.pendingTurn._retryPayload);
+  }
   renderAll();
 }
 

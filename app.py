@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Literal
@@ -14,6 +15,8 @@ from pydantic import BaseModel, Field
 from skill_debugger.service import SkillDebuggerService
 from skill_debugger.settings import load_skill_debugger_settings
 from skill_debugger.store import WorkspaceStore
+
+logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
 STATE_DIR = Path(os.getenv("SKILL_DEBUGGER_STATE_DIR", BASE_DIR / "state"))
@@ -251,6 +254,8 @@ async def chat_stream(workspace_id: str, payload: ChatRequest) -> StreamingRespo
         except ValueError as exc:
             yield f"event: error\ndata: {json.dumps({'message': str(exc)}, ensure_ascii=False)}\n\n"
         except Exception as exc:  # pragma: no cover - runtime-specific failures
-            yield f"event: error\ndata: {json.dumps({'message': str(exc)}, ensure_ascii=False)}\n\n"
+            logger.exception("Unhandled error in chat stream")
+            err_type = type(exc).__name__
+            yield f"event: error\ndata: {json.dumps({'message': f'Internal error: {err_type}. Check server logs.'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

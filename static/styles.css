@@ -1313,6 +1313,24 @@ body {
   50% { opacity: 0; }
 }
 
+/* retry button on error messages */
+.retry-btn {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 4px 14px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: #fff;
+  background: var(--accent, #6366f1);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.retry-btn:hover {
+  background: #4f46e5;
+}
+
 /* composer */
 .chat-composer {
   flex-shrink: 0;
