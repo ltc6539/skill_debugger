@@ -1,0 +1,10 @@
+.env
+.composio_cache/
+__pycache__/
+*.pyc
+.pytest_cache/
+state/
+server.log
+server.pid
+server-*.log
+server-*.pid

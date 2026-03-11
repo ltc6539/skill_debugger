@@ -1,0 +1,10 @@
+fastapi>=0.110.0
+uvicorn>=0.27.0
+python-multipart>=0.0.9
+claude-agent-sdk>=0.0.20
+anthropic>=0.47.0
+openai-agents>=0.1.0
+composio-core>=0.5.0
+composio-openai-agents>=0.1.0
+requests>=2.31.0
+PyYAML>=6.0
