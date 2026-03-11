@@ -64,6 +64,9 @@ class WorkspaceStore:
             if not target.exists():
                 raise KeyError(f"Workspace not found: {workspace_id}")
             shutil.rmtree(target)
+            runtime_root = self.runtime_projects_dir(workspace_id)
+            if runtime_root.exists():
+                shutil.rmtree(runtime_root)
 
     def workspace_dir(self, workspace_id: str) -> Path:
         return self.base_dir / workspace_id
@@ -78,7 +81,7 @@ class WorkspaceStore:
         return self.workspace_dir(workspace_id) / "skills"
 
     def runtime_projects_dir(self, workspace_id: str) -> Path:
-        return self.workspace_dir(workspace_id) / ".runtime_projects"
+        return self.base_dir / ".runtime_projects" / workspace_id
 
     def runtime_project_dir(self, workspace_id: str, runtime_key: str) -> Path:
         return self.runtime_projects_dir(workspace_id) / runtime_key
@@ -134,6 +137,7 @@ class WorkspaceStore:
             session["last_mode"] = "agent"
             session["last_forced_skill_id"] = None
             session["last_model"] = None
+            session["last_runtime_cwd"] = None
             return self.save_session(workspace_id, session)
 
     def append_turn(
@@ -148,12 +152,14 @@ class WorkspaceStore:
         forced_skill_id: str | None,
         model: str | None,
         claude_session_id: str | None,
+        runtime_cwd: str | None,
     ) -> dict:
         session = self.get_session(workspace_id)
         session["claude_session_id"] = claude_session_id
         session["last_mode"] = mode
         session["last_forced_skill_id"] = forced_skill_id
         session["last_model"] = model
+        session["last_runtime_cwd"] = runtime_cwd
         session["turns"].append(
             {
                 "turn_id": uuid4().hex,
@@ -321,6 +327,7 @@ class WorkspaceStore:
             "last_mode": "agent",
             "last_forced_skill_id": None,
             "last_model": None,
+            "last_runtime_cwd": None,
             "turns": [],
         }
 

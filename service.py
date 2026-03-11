@@ -534,6 +534,7 @@ class SkillDebuggerService:
                 mode=mode,
                 visible_skill_ids=visible_skill_ids,
             )
+            runtime_cwd = str(runtime_project_dir.resolve())
 
             session = self.store.get_session(workspace_id)
             tool_registry = self._sync_declared_skill_tools(
@@ -561,7 +562,13 @@ class SkillDebuggerService:
                 include_partial_messages=True,
                 resume=(
                     session.get("claude_session_id")
-                    if self._can_resume_session(session, mode, forced_skill_id, effective_model)
+                    if self._can_resume_session(
+                        session,
+                        mode,
+                        forced_skill_id,
+                        effective_model,
+                        runtime_cwd,
+                    )
                     else None
                 ),
                 setting_sources=["project"],
@@ -628,6 +635,7 @@ class SkillDebuggerService:
                 forced_skill_id=forced_skill_id,
                 model=effective_model,
                 claude_session_id=claude_session_id,
+                runtime_cwd=runtime_cwd,
             )
             yield {
                 "event": "done",
@@ -964,6 +972,7 @@ class SkillDebuggerService:
         mode: DebuggerMode,
         forced_skill_id: str | None,
         model: str | None,
+        runtime_cwd: str,
     ) -> bool:
         if not session.get("claude_session_id"):
             return False
@@ -972,6 +981,8 @@ class SkillDebuggerService:
         if session.get("last_forced_skill_id") != forced_skill_id:
             return False
         if session.get("last_model") != model:
+            return False
+        if session.get("last_runtime_cwd") != runtime_cwd:
             return False
         return True
 
